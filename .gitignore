@@ -51,6 +51,8 @@ Module.symvers
 Mkfile.old
 dkms.conf
 
+# Dev Files
+compile_commands.json
 
 # nginx files
 build/

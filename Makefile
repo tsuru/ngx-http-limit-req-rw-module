@@ -17,3 +17,8 @@ build-module:
 clean:
 	rm -rf nginx-1.26.3
 	rm -rf nginx.tar.gz
+
+.PHONY: run
+run:
+	./build/sbin/nginx -c $(PWD)/nginx.conf
+
