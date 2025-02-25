@@ -46,39 +46,53 @@ ngx_module_t ngx_http_limit_req_rw_module = {NGX_MODULE_V1,
                                              NULL,
                                              NGX_MODULE_V1_PADDING};
 
-static ngx_int_t ngx_http_limit_req_read_handler(ngx_http_request_t *r) {
+static ngx_int_t ngx_http_limit_req_handler(ngx_http_request_t *r)
+{
+  if (r->method != NGX_HTTP_GET)
+  {
+    return NGX_HTTP_NOT_ALLOWED;
+  }
+
+  return ngx_http_limit_req_read_handler(r);
+}
+
+
+static ngx_int_t ngx_http_limit_req_read_handler(ngx_http_request_t *r)
+{
   ngx_buf_t *b;
-    ngx_chain_t out;
-    ngx_str_t response = ngx_string("Hello World");
-    ngx_str_t content_type = ngx_string("text/plain");
+  ngx_chain_t out;
+  ngx_str_t response = ngx_string("Hello World");
+  ngx_str_t content_type = ngx_string("text/plain");
 
-    r->headers_out.content_type = content_type;
-    r->headers_out.content_length_n = response.len;
-    r->headers_out.status = NGX_HTTP_OK; /* 200 OK */
+  r->headers_out.content_type = content_type;
+  r->headers_out.content_length_n = response.len;
+  r->headers_out.status = NGX_HTTP_OK; /* 200 OK */
 
-    ngx_http_send_header(r);
+  ngx_http_send_header(r);
 
-    b = ngx_create_temp_buf(r->pool, response.len);
-    if (b == NULL) {
-        return NGX_HTTP_INTERNAL_SERVER_ERROR;
-    }
+  b = ngx_create_temp_buf(r->pool, response.len);
+  if (b == NULL)
+  {
+    return NGX_HTTP_INTERNAL_SERVER_ERROR;
+  }
 
-    ngx_memcpy(b->pos, response.data, response.len);
-    b->last = b->pos + response.len;
-    b->last_buf = 1;
+  ngx_memcpy(b->pos, response.data, response.len);
+  b->last = b->pos + response.len;
+  b->last_buf = 1;
 
-    out.buf = b;
-    out.next = NULL;
+  out.buf = b;
+  out.next = NULL;
 
-    return ngx_http_output_filter(r, &out);
+  return ngx_http_output_filter(r, &out);
 }
 
 char *ngx_http_limit_req_rw_handler(ngx_conf_t *cf, ngx_command_t *cmd,
-                                    void *conf) {
+                                    void *conf)
+{
   ngx_http_core_loc_conf_t *clcf;
 
   clcf = ngx_http_conf_get_module_loc_conf(cf, ngx_http_core_module);
-  clcf->handler = ngx_http_limit_req_read_handler;
+  clcf->handler = ngx_http_limit_req_handler;
 
   return NGX_CONF_OK;
 }
