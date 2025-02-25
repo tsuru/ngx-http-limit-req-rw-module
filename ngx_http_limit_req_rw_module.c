@@ -3,6 +3,7 @@ TODO: copyright
 */
 
 #include "ngx_http_limit_req_rw_module.h"
+#include "ngx_http_limit_req_module.h"
 #include "ngx_conf_file.h"
 #include "ngx_core.h"
 #include <ngx_http.h>
@@ -56,9 +57,17 @@ static ngx_int_t ngx_http_limit_req_handler(ngx_http_request_t *r)
   return ngx_http_limit_req_read_handler(r);
 }
 
-
 static ngx_int_t ngx_http_limit_req_read_handler(ngx_http_request_t *r)
 {
+  ngx_http_limit_req_conf_t *main_limit_req_config;
+  main_limit_req_config = ngx_http_get_module_loc_conf(r, ngx_http_limit_req_module);
+
+
+  printf("HELP! HELP!, size of config: %lu\n", main_limit_req_config->limits.size);
+
+  printf("HELP! HELP!, found module! %p\n", main_limit_req_config);
+  printf("HELP! HELP!, module index %lu\n", ngx_http_limit_req_module.index);
+
   ngx_buf_t *b;
   ngx_chain_t out;
   ngx_str_t response = ngx_string("Hello World");
