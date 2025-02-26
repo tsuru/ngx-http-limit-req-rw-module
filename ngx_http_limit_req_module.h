@@ -3,7 +3,8 @@
  * Copyright (C) Nginx, Inc.
  */
 
- #include <ngx_core.h>
+#include <ngx_core.h>
+#include <ngx_http.h>
 
  typedef struct {
     ngx_array_t                  limits;

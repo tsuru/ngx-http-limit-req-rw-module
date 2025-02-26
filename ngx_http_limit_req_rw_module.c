@@ -3,23 +3,24 @@ TODO: copyright
 */
 
 #include "ngx_http_limit_req_rw_module.h"
-#include "ngx_http_limit_req_module.h"
 #include "ngx_conf_file.h"
 #include "ngx_core.h"
+#include "ngx_http_limit_req_module.h"
 #include <ngx_http.h>
 #include <stdio.h>
 
 static ngx_int_t ngx_http_limit_req_read_handler(ngx_http_request_t *r);
 
 static char *ngx_http_limit_req_rw_handler(ngx_conf_t *cf, ngx_command_t *cmd,
-                                    void *conf);
+                                           void *conf);
 
 static void dump_req_limits();
 static void dump_req_limit(ngx_shm_zone_t *shm_zone);
 
 static ngx_command_t ngx_http_limit_req_rw_commands[] = {
     {ngx_string("limit_req_rw_handler"),
-     NGX_HTTP_MAIN_CONF | NGX_HTTP_SRV_CONF | NGX_HTTP_LOC_CONF | NGX_CONF_NOARGS | NGX_CONF_TAKE1,
+     NGX_HTTP_MAIN_CONF | NGX_HTTP_SRV_CONF | NGX_HTTP_LOC_CONF |
+         NGX_CONF_NOARGS | NGX_CONF_TAKE1,
      ngx_http_limit_req_rw_handler, 0, 0, NULL},
     ngx_null_command};
 
@@ -50,18 +51,15 @@ ngx_module_t ngx_http_limit_req_rw_module = {NGX_MODULE_V1,
                                              NULL,
                                              NGX_MODULE_V1_PADDING};
 
-static ngx_int_t ngx_http_limit_req_handler(ngx_http_request_t *r)
-{
-  if (r->method != NGX_HTTP_GET)
-  {
+static ngx_int_t ngx_http_limit_req_handler(ngx_http_request_t *r) {
+  if (r->method != NGX_HTTP_GET) {
     return NGX_HTTP_NOT_ALLOWED;
   }
 
   return ngx_http_limit_req_read_handler(r);
 }
 
-static ngx_int_t ngx_http_limit_req_read_handler(ngx_http_request_t *r)
-{
+static ngx_int_t ngx_http_limit_req_read_handler(ngx_http_request_t *r) {
 
   dump_req_limits();
 
@@ -77,8 +75,7 @@ static ngx_int_t ngx_http_limit_req_read_handler(ngx_http_request_t *r)
   ngx_http_send_header(r);
 
   b = ngx_create_temp_buf(r->pool, response.len);
-  if (b == NULL)
-  {
+  if (b == NULL) {
     return NGX_HTTP_INTERNAL_SERVER_ERROR;
   }
 
@@ -93,8 +90,7 @@ static ngx_int_t ngx_http_limit_req_read_handler(ngx_http_request_t *r)
 }
 
 static char *ngx_http_limit_req_rw_handler(ngx_conf_t *cf, ngx_command_t *cmd,
-                                    void *conf)
-{
+                                           void *conf) {
   ngx_http_core_loc_conf_t *clcf;
 
   clcf = ngx_http_conf_get_module_loc_conf(cf, ngx_http_core_module);
@@ -103,14 +99,12 @@ static char *ngx_http_limit_req_rw_handler(ngx_conf_t *cf, ngx_command_t *cmd,
   return NGX_CONF_OK;
 }
 
-static void dump_req_limits()
-{
+static void dump_req_limits() {
   ngx_uint_t i;
   ngx_shm_zone_t *shm_zone;
   volatile ngx_list_part_t *part;
 
-  if (ngx_cycle == NULL)
-  {
+  if (ngx_cycle == NULL) {
     printf("ngx_cycle is NULL\n");
     return;
   }
@@ -118,13 +112,10 @@ static void dump_req_limits()
   part = &ngx_cycle->shared_memory.part;
   shm_zone = part->elts;
 
-  for (i = 0; /* void */; i++)
-  {
+  for (i = 0; /* void */; i++) {
 
-    if (i >= part->nelts)
-    {
-      if (part->next == NULL)
-      {
+    if (i >= part->nelts) {
+      if (part->next == NULL) {
         break;
       }
       part = part->next;
@@ -132,13 +123,11 @@ static void dump_req_limits()
       i = 0;
     }
 
-    if (shm_zone == NULL)
-    {
+    if (shm_zone == NULL) {
       continue;
     }
 
-    if (shm_zone[i].tag != &ngx_http_limit_req_module)
-    {
+    if (shm_zone[i].tag != &ngx_http_limit_req_module) {
       continue;
     }
 
@@ -146,7 +135,46 @@ static void dump_req_limits()
   }
 }
 
+// FIXME: This function is blocking subsequente requests to
+// http://localhost:8080/api
 static void dump_req_limit(ngx_shm_zone_t *shm_zone) {
-  printf("shm.name %p -> %.*s \n", shm_zone->data, (int)shm_zone->shm.name.len, shm_zone->shm.name.data);
+  ngx_http_limit_req_ctx_t *ctx;
+  ngx_queue_t *head, *q;
+  ngx_http_limit_req_node_t *lr;
+  char str_addr[INET_ADDRSTRLEN];
 
+  ctx = shm_zone->data;
+  printf("shm.name %p -> %.*s - rate: %lu \n", shm_zone->data,
+         (int)shm_zone->shm.name.len, shm_zone->shm.name.data, ctx->rate);
+
+  ngx_shmtx_lock(&ctx->shpool->mutex);
+
+  if (ngx_queue_empty(&ctx->sh->queue)) {
+    return;
+  }
+
+  head = ngx_queue_head(&ctx->sh->queue);
+  q = ngx_queue_last(head);
+
+  while (q != head) {
+    lr = ngx_queue_data(q, ngx_http_limit_req_node_t, queue);
+
+    if (inet_ntop(AF_INET, lr->data, str_addr, sizeof(str_addr)) == NULL) {
+      perror("inet_ntop");
+    } else {
+      printf("key: %s - excess: %lu - count: %lu \n", str_addr, lr->excess,
+             lr->last);
+    }
+    q = q->prev;
+  }
+
+  lr = ngx_queue_data(head, ngx_http_limit_req_node_t, queue);
+  if (inet_ntop(AF_INET, lr->data, str_addr, sizeof(str_addr)) == NULL) {
+    perror("inet_ntop");
+  } else {
+    printf("key: %s - excess: %lu - count: %lu \n", str_addr, lr->excess,
+           lr->last);
+  }
+
+  ngx_shmtx_unlock(&ctx->shpool->mutex);
 }
