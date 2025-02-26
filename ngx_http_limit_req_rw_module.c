@@ -135,8 +135,6 @@ static void dump_req_limits() {
   }
 }
 
-// FIXME: This function is blocking subsequente requests to
-// http://localhost:8080/api
 static void dump_req_limit(ngx_shm_zone_t *shm_zone) {
   ngx_http_limit_req_ctx_t *ctx;
   ngx_queue_t *head, *q;
@@ -150,6 +148,7 @@ static void dump_req_limit(ngx_shm_zone_t *shm_zone) {
   ngx_shmtx_lock(&ctx->shpool->mutex);
 
   if (ngx_queue_empty(&ctx->sh->queue)) {
+    ngx_shmtx_unlock(&ctx->shpool->mutex);
     return;
   }
 
@@ -166,14 +165,6 @@ static void dump_req_limit(ngx_shm_zone_t *shm_zone) {
              lr->last);
     }
     q = q->prev;
-  }
-
-  lr = ngx_queue_data(head, ngx_http_limit_req_node_t, queue);
-  if (inet_ntop(AF_INET, lr->data, str_addr, sizeof(str_addr)) == NULL) {
-    perror("inet_ntop");
-  } else {
-    printf("key: %s - excess: %lu - count: %lu \n", str_addr, lr->excess,
-           lr->last);
   }
 
   ngx_shmtx_unlock(&ctx->shpool->mutex);
