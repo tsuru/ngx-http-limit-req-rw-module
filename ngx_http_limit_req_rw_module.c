@@ -11,18 +11,16 @@ TODO: copyright
 
 static ngx_int_t ngx_http_limit_req_read_handler(ngx_http_request_t *r);
 
-char *ngx_http_limit_req_rw_handler(ngx_conf_t *cf, ngx_command_t *cmd,
+static char *ngx_http_limit_req_rw_handler(ngx_conf_t *cf, ngx_command_t *cmd,
                                     void *conf);
-char *ngx_http_limit_req_global_zone(ngx_conf_t *cf, ngx_command_t *cmd,
-                                    void *conf);
+
+static void dump_req_limits();
+static void dump_req_limit(ngx_shm_zone_t *shm_zone);
 
 static ngx_command_t ngx_http_limit_req_rw_commands[] = {
     {ngx_string("limit_req_rw_handler"),
      NGX_HTTP_MAIN_CONF | NGX_HTTP_SRV_CONF | NGX_HTTP_LOC_CONF | NGX_CONF_NOARGS | NGX_CONF_TAKE1,
      ngx_http_limit_req_rw_handler, 0, 0, NULL},
-    {ngx_string("limit_req_global_zone"),
-     NGX_HTTP_MAIN_CONF | NGX_HTTP_SRV_CONF | NGX_HTTP_LOC_CONF | NGX_CONF_NOARGS | NGX_CONF_TAKE1,
-     ngx_http_limit_req_global_zone, 0, 0, NULL},
     ngx_null_command};
 
 static ngx_http_module_t ngx_http_limit_req_rw_module_ctx = {
@@ -64,14 +62,8 @@ static ngx_int_t ngx_http_limit_req_handler(ngx_http_request_t *r)
 
 static ngx_int_t ngx_http_limit_req_read_handler(ngx_http_request_t *r)
 {
-  ngx_http_limit_req_conf_t *main_limit_req_config;
-  main_limit_req_config = ngx_http_get_module_loc_conf(r, ngx_http_limit_req_module);
 
-
-  printf("HELP! HELP!, size of config: %lu\n", main_limit_req_config->limits.size);
-  printf("HELP! HELP!, found module! %p\n", main_limit_req_config);
-  printf("HELP! HELP!, module index %lu\n", ngx_http_limit_req_module.index);
-  printf("HELP! HELP!, module ctx index %p\n", r->ctx);
+  dump_req_limits();
 
   ngx_buf_t *b;
   ngx_chain_t out;
@@ -100,7 +92,7 @@ static ngx_int_t ngx_http_limit_req_read_handler(ngx_http_request_t *r)
   return ngx_http_output_filter(r, &out);
 }
 
-char *ngx_http_limit_req_rw_handler(ngx_conf_t *cf, ngx_command_t *cmd,
+static char *ngx_http_limit_req_rw_handler(ngx_conf_t *cf, ngx_command_t *cmd,
                                     void *conf)
 {
   ngx_http_core_loc_conf_t *clcf;
@@ -111,17 +103,50 @@ char *ngx_http_limit_req_rw_handler(ngx_conf_t *cf, ngx_command_t *cmd,
   return NGX_CONF_OK;
 }
 
-char *ngx_http_limit_req_global_zone(ngx_conf_t *cf, ngx_command_t *cmd,
-                                    void *conf)
+static void dump_req_limits()
 {
-  ngx_http_limit_req_conf_t *clcf;
-  clcf = ngx_http_conf_get_module_loc_conf(cf, ngx_http_limit_req_module);
+  ngx_uint_t i;
+  ngx_shm_zone_t *shm_zone;
+  volatile ngx_list_part_t *part;
 
-  printf("HELP! HELP!, found global zone! %li\n", clcf->status_code);
-
-  for(ngx_uint_t i = 0; i < clcf->limits.nelts; i++) {
-    printf("HELP! HELP!, limit %lu\n", i);
+  if (ngx_cycle == NULL)
+  {
+    printf("ngx_cycle is NULL\n");
+    return;
   }
 
-  return NGX_CONF_OK;
+  part = &ngx_cycle->shared_memory.part;
+  shm_zone = part->elts;
+
+  for (i = 0; /* void */; i++)
+  {
+
+    if (i >= part->nelts)
+    {
+      if (part->next == NULL)
+      {
+        break;
+      }
+      part = part->next;
+      shm_zone = part->elts;
+      i = 0;
+    }
+
+    if (shm_zone == NULL)
+    {
+      continue;
+    }
+
+    if (shm_zone[i].tag != &ngx_http_limit_req_module)
+    {
+      continue;
+    }
+
+    dump_req_limit(&shm_zone[i]);
+  }
+}
+
+static void dump_req_limit(ngx_shm_zone_t *shm_zone) {
+  printf("shm.name %p -> %.*s \n", shm_zone->data, (int)shm_zone->shm.name.len, shm_zone->shm.name.data);
+
 }
