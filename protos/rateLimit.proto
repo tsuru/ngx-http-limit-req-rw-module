@@ -1,0 +1,9 @@
+syntax = "proto3";
+
+message RateLimitValues {
+  bytes key = 1;
+  uint64 excess = 2;
+  uint64 last = 3;
+};
+
+message RateLimitResponse { repeated RateLimitValues rateLimits = 1; };
