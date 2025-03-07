@@ -6,4 +6,7 @@ message RateLimitValues {
   uint64 last = 3;
 };
 
-message RateLimitResponse { repeated RateLimitValues rateLimits = 1; };
+message RateLimitResponse {
+  string zone = 1;
+  repeated RateLimitValues rateLimits = 2;
+};

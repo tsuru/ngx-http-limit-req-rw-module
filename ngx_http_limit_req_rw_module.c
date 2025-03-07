@@ -6,6 +6,7 @@ TODO: copyright
 #include "ngx_conf_file.h"
 #include "ngx_core.h"
 #include "ngx_http_limit_req_module.h"
+#include "ngx_times.h"
 #include <ngx_http.h>
 #include <stdio.h>
 
@@ -112,6 +113,7 @@ static void dump_req_limits() {
   part = &ngx_cycle->shared_memory.part;
   shm_zone = part->elts;
 
+  printf("\n");
   for (i = 0; /* void */; i++) {
 
     if (i >= part->nelts) {
@@ -137,7 +139,7 @@ static void dump_req_limits() {
 
 static void dump_req_limit(ngx_shm_zone_t *shm_zone) {
   ngx_http_limit_req_ctx_t *ctx;
-  ngx_queue_t *head, *q;
+  ngx_queue_t *head, *q, *last;
   ngx_http_limit_req_node_t *lr;
   char str_addr[INET_ADDRSTRLEN];
 
@@ -153,18 +155,24 @@ static void dump_req_limit(ngx_shm_zone_t *shm_zone) {
   }
 
   head = ngx_queue_head(&ctx->sh->queue);
-  q = ngx_queue_last(head);
+  last = ngx_queue_last(head);
+  q = head;
 
-  while (q != head) {
+  // NOW (unix timstamp) ngx_cached_time->sec + 1000 * ngx_cached_time->msec
+  // NOWM (ngx_current_msec)
+  // LAST (cada LR)
+  // LAST_REQTIMESTAMP (unix timstamp) = NOW - (NOWM - LAST)
+
+  while (q != last) {
     lr = ngx_queue_data(q, ngx_http_limit_req_node_t, queue);
 
     if (inet_ntop(AF_INET, lr->data, str_addr, sizeof(str_addr)) == NULL) {
       perror("inet_ntop");
     } else {
-      printf("key: %s - excess: %lu - count: %lu \n", str_addr, lr->excess,
-             lr->last);
+      printf("key: %s - excess: %lu - last: %lu - now(monotonic): %lu - now(cached): %lu - now(cached-msec): %lu\n", str_addr,
+             lr->excess, lr->last, ngx_current_msec, ngx_cached_time->sec, ngx_cached_time->msec);
     }
-    q = q->prev;
+    q = q->next;
   }
 
   ngx_shmtx_unlock(&ctx->shpool->mutex);
