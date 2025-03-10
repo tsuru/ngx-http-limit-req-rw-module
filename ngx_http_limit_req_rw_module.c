@@ -9,6 +9,7 @@ TODO: copyright
 #include "ngx_times.h"
 #include <ngx_http.h>
 #include <stdio.h>
+#include <time.h>
 
 static ngx_int_t ngx_http_limit_req_read_handler(ngx_http_request_t *r);
 
@@ -142,6 +143,7 @@ static void dump_req_limit(ngx_shm_zone_t *shm_zone) {
   ngx_queue_t *head, *q, *last;
   ngx_http_limit_req_node_t *lr;
   char str_addr[INET_ADDRSTRLEN];
+  time_t now, now_monotonic, last_request_timestamp;
 
   ctx = shm_zone->data;
   printf("shm.name %p -> %.*s - rate: %lu \n", shm_zone->data,
@@ -158,19 +160,23 @@ static void dump_req_limit(ngx_shm_zone_t *shm_zone) {
   last = ngx_queue_last(head);
   q = head;
 
-  // NOW (unix timstamp) ngx_cached_time->sec + 1000 * ngx_cached_time->msec
-  // NOWM (ngx_current_msec)
-  // LAST (cada LR)
-  // LAST_REQTIMESTAMP (unix timstamp) = NOW - (NOWM - LAST)
+  // retrieving current timestamp in milliseconds
+  now = ngx_cached_time->sec * 1000 + ngx_cached_time->msec;
 
   while (q != last) {
     lr = ngx_queue_data(q, ngx_http_limit_req_node_t, queue);
+    // retrieving current monotonic timestamp in milliseconds
+    now_monotonic = ngx_current_msec;
+    // calculate last request timestamp based on this equation:
+    // NOW - (NOW_MONOTONIC - LAST_MONOTONIC)
+    last_request_timestamp = now - (now_monotonic - lr->last);
 
     if (inet_ntop(AF_INET, lr->data, str_addr, sizeof(str_addr)) == NULL) {
       perror("inet_ntop");
     } else {
-      printf("key: %s - excess: %lu - last: %lu - now(monotonic): %lu - now(cached): %lu - now(cached-msec): %lu\n", str_addr,
-             lr->excess, lr->last, ngx_current_msec, ngx_cached_time->sec, ngx_cached_time->msec);
+      printf("key: %s - excess: %lu - last_request_timestamp: %lu - now(var): "
+             "%lu\n",
+             str_addr, lr->excess, last_request_timestamp, now);
     }
     q = q->next;
   }
