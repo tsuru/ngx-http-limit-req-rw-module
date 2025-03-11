@@ -13,6 +13,9 @@ build-nginx:
 build-module:
 	cd nginx-1.26.3 && make modules && make install
 
+build-proto:
+	protoc --c_out=. ngx_http_limit_req_rw_message.proto
+
 clean:
 	rm -rf nginx-1.26.3
 	rm -rf nginx.tar.gz

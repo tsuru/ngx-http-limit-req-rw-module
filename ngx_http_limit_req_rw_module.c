@@ -6,6 +6,7 @@ TODO: copyright
 #include "ngx_conf_file.h"
 #include "ngx_core.h"
 #include "ngx_http_limit_req_module.h"
+#include "ngx_http_limit_req_rw_message.pb-c.h"
 #include "ngx_times.h"
 #include <ngx_http.h>
 #include <stdio.h>
