@@ -44,8 +44,9 @@ uint8_t *read_binary_file(const char *filename, size_t *len) {
 }
 
 int main(int argc, char *argv[]) {
-  size_t len, index;
-  uint8_t *data, *original_data;
+  size_t len, i;
+  uint8_t *data;
+  RateLimitZone *rateLimitZone;
   RateLimitValues *rateLimitValues;
   char str_addr[INET_ADDRSTRLEN];
 
@@ -60,30 +61,31 @@ int main(int argc, char *argv[]) {
   }
   printf("Read %zu bytes from %s\n", len, argv[1]);
 
-  original_data = data;
-  // FIXME: This here assumes that are exactly 2 entries on the binary file.
-  // FIXME: When we start using RateLimitZone types, this will change
-  for (index = 0; index < len; index += len / 2) {
-    rateLimitValues = rate_limit_values__unpack(NULL, len / 2, data);
-    if (rateLimitValues == NULL) {
-      perror("Rate Limit Values Unpack Failed");
-      free(data);
-      return EXIT_FAILURE;
-    }
+  rateLimitZone = rate_limit_zone__unpack(NULL, len, data);
+  if (rateLimitZone == NULL) {
+    perror("Rate Limit Values Unpack Failed");
+    free(data);
+    return EXIT_FAILURE;
+  }
 
+  printf(
+      "Sucessfully read rate limit zone - number of rate limit values: %lu\n",
+      rateLimitZone->n_ratelimits);
+  for (i = 0; i < rateLimitZone->n_ratelimits; i++) {
+    rateLimitValues = rateLimitZone->ratelimits[i];
     if (inet_ntop(AF_INET, rateLimitValues->key.data, str_addr,
                   sizeof(str_addr)) == NULL) {
       perror("inet_ntop");
-      rate_limit_values__free_unpacked(rateLimitValues, NULL);
+      rate_limit_zone__free_unpacked(rateLimitZone, NULL);
       return EXIT_FAILURE;
     } else {
       printf("key: %s - excess: %llu - last_request_timestamp: %llu\n",
              str_addr, rateLimitValues->excess, rateLimitValues->last);
     }
-    rate_limit_values__free_unpacked(rateLimitValues, NULL);
-    data += len / 2;
   }
 
-  free(original_data);
+  rate_limit_zone__free_unpacked(rateLimitZone, NULL);
+
+  free(data);
   return EXIT_SUCCESS;
 }
