@@ -22,9 +22,7 @@ typedef struct {
 static void nginx_buffer_append(ProtobufCBuffer *buffer, size_t len,
                                 const uint8_t *data) {
   BufferAppendToNginx *nginx_buf = (BufferAppendToNginx *)buffer;
-  nginx_buf->b->last = ngx_sprintf(nginx_buf->b->last, "LENGTH: %lu\n", len);
-  // BufferAppendToNginx *file_buf = (BufferAppendToNginx *) buffer;
-  // fwrite(data, len, 1, file_buf->fp); // XXX: No error handling!
+  nginx_buf->b->last = ngx_cpymem(nginx_buf->b->last, data, len);
 }
 
 static ngx_int_t ngx_http_limit_req_read_handler(ngx_http_request_t *r);
@@ -172,13 +170,13 @@ static void dump_req_limit(ngx_shm_zone_t *shm_zone, BufferAppendToNginx *buf) {
   ngx_http_limit_req_node_t *lr;
   char str_addr[INET_ADDRSTRLEN];
   time_t now, now_monotonic, last_request_timestamp;
-  RateLimitValues rate_limit;
+  RateLimitValues rate_limit_value;
 
   ctx = shm_zone->data;
   printf("shm.name %p -> %.*s - rate: %lu \n", shm_zone->data,
          (int)shm_zone->shm.name.len, shm_zone->shm.name.data, ctx->rate);
 
-  rate_limit_values__init(&rate_limit);
+  rate_limit_values__init(&rate_limit_value);
 
   ngx_shmtx_lock(&ctx->shpool->mutex);
 
@@ -209,12 +207,13 @@ static void dump_req_limit(ngx_shm_zone_t *shm_zone, BufferAppendToNginx *buf) {
              "%lu\n",
              str_addr, lr->excess, last_request_timestamp, now);
     }
-    rate_limit.key.len = lr->len;
-    rate_limit.key.data = lr->data;
-    rate_limit.excess = lr->excess;
-    rate_limit.last = last_request_timestamp;
+    rate_limit_value.key.len = lr->len;
+    rate_limit_value.key.data = lr->data;
+    rate_limit_value.excess = lr->excess;
+    rate_limit_value.last = last_request_timestamp;
 
-    rate_limit_values__pack_to_buffer(&rate_limit, (ProtobufCBuffer *)buf);
+    rate_limit_values__pack_to_buffer(&rate_limit_value,
+                                      (ProtobufCBuffer *)buf);
     q = q->next;
   }
 
