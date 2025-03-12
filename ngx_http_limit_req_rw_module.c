@@ -5,11 +5,14 @@ TODO: copyright
 #include "ngx_http_limit_req_rw_module.h"
 #include "ngx_buf.h"
 #include "ngx_conf_file.h"
+#include "ngx_config.h"
 #include "ngx_core.h"
 #include "ngx_http_limit_req_module.h"
 #include "ngx_http_limit_req_rw_message.pb-c.h"
+#include "ngx_http_request.h"
 #include "ngx_string.h"
 #include "ngx_times.h"
+#include "protobuf-c/protobuf-c.h"
 #include <ngx_http.h>
 #include <stdio.h>
 #include <time.h>
@@ -29,9 +32,12 @@ static ngx_int_t ngx_http_limit_req_read_handler(ngx_http_request_t *r);
 
 static char *ngx_http_limit_req_rw_handler(ngx_conf_t *cf, ngx_command_t *cmd,
                                            void *conf);
-
-static void dump_req_limits(ngx_buf_t *b);
-static void dump_req_limit(ngx_shm_zone_t *shm_zone, BufferAppendToNginx *buf);
+static void strip_zone_name_from_uri(ngx_str_t *uri, ngx_str_t *zone_name);
+static ngx_int_t dump_req_zone(ngx_pool_t *pool, ngx_buf_t *b,
+                               ngx_str_t *zone_name);
+static ngx_int_t dump_req_limits(ngx_pool_t *pool, ngx_shm_zone_t *shm_zone,
+                                 BufferAppendToNginx *buf);
+static size_t count_queue_entries(ngx_queue_t *head, ngx_queue_t *last);
 
 static ngx_command_t ngx_http_limit_req_rw_commands[] = {
     {ngx_string("limit_req_rw_handler"),
@@ -76,21 +82,31 @@ static ngx_int_t ngx_http_limit_req_handler(ngx_http_request_t *r) {
 }
 
 static ngx_int_t ngx_http_limit_req_read_handler(ngx_http_request_t *r) {
+  ngx_str_t content_type, zone_name;
   ngx_int_t rc;
   ngx_buf_t *b;
   ngx_chain_t out;
 
-  b = ngx_create_temp_buf(r->pool, 1024);
+  if (r->method != NGX_HTTP_GET) {
+    return NGX_HTTP_NOT_ALLOWED;
+  }
+
+  strip_zone_name_from_uri(&r->uri, &zone_name);
+  printf("ZoneName: %.*s", (int)zone_name.len, zone_name.data);
+
+  b = ngx_create_temp_buf(r->pool, 1024 * 10);
   if (b == NULL) {
     return NGX_HTTP_INTERNAL_SERVER_ERROR;
   }
 
-  dump_req_limits(b);
+  rc = dump_req_zone(r->pool, b, &zone_name);
+  if (rc != NGX_OK) {
+    return rc;
+  }
+
+  ngx_str_set(&content_type, "application/protobuf");
+  r->headers_out.content_type = content_type;
   printf("Content-Length: %lu\n", b->last - b->pos);
-
-  r->headers_out.content_type_len = sizeof("text/plain") - 1;
-  r->headers_out.content_type.data = (u_char *)"text/plain";
-
   r->headers_out.content_length_n = b->last - b->pos;
   r->headers_out.status = NGX_HTTP_OK; /* 200 OK */
 
@@ -121,7 +137,20 @@ static char *ngx_http_limit_req_rw_handler(ngx_conf_t *cf, ngx_command_t *cmd,
   return NGX_CONF_OK;
 }
 
-static void dump_req_limits(ngx_buf_t *b) {
+static void strip_zone_name_from_uri(ngx_str_t *uri, ngx_str_t *zone_name) {
+  zone_name->data = (u_char *)ngx_strlchr(uri->data, uri->data + uri->len, '/');
+  zone_name->len = 0;
+
+  if (zone_name->data) {
+    zone_name->data =
+        (u_char *)(ngx_strlchr(zone_name->data + 1, uri->data + uri->len, '/') +
+                   1);
+    zone_name->len = uri->len - (zone_name->data - uri->data);
+  }
+}
+
+static ngx_int_t dump_req_zone(ngx_pool_t *pool, ngx_buf_t *b,
+                               ngx_str_t *zone_name) {
   ngx_uint_t i;
   ngx_shm_zone_t *shm_zone;
   volatile ngx_list_part_t *part;
@@ -132,13 +161,12 @@ static void dump_req_limits(ngx_buf_t *b) {
 
   if (ngx_cycle == NULL) {
     printf("ngx_cycle is NULL\n");
-    return;
+    return NGX_HTTP_INTERNAL_SERVER_ERROR;
   }
 
   part = &ngx_cycle->shared_memory.part;
   shm_zone = part->elts;
 
-  printf("\n");
   for (i = 0; /* void */; i++) {
 
     if (i >= part->nelts) {
@@ -158,40 +186,52 @@ static void dump_req_limits(ngx_buf_t *b) {
       continue;
     }
 
-    dump_req_limit(&shm_zone[i], &buf);
+    if (ngx_strcmp(zone_name, &shm_zone[i].shm.name) == 0) {
+      return dump_req_limits(pool, &shm_zone[i], &buf);
+    }
   }
-
-  return;
+  return NGX_HTTP_NOT_FOUND;
 }
 
-static void dump_req_limit(ngx_shm_zone_t *shm_zone, BufferAppendToNginx *buf) {
+static ngx_int_t dump_req_limits(ngx_pool_t *pool, ngx_shm_zone_t *shm_zone,
+                                 BufferAppendToNginx *buf) {
   ngx_http_limit_req_ctx_t *ctx;
   ngx_queue_t *head, *q, *last;
   ngx_http_limit_req_node_t *lr;
   char str_addr[INET_ADDRSTRLEN];
   time_t now, now_monotonic, last_request_timestamp;
-  RateLimitValues rate_limit_value;
+  size_t i;
+  RateLimitZone rate_limit_zone;
+  RateLimitValues *rate_limit_value;
 
   ctx = shm_zone->data;
-  printf("shm.name %p -> %.*s - rate: %lu \n", shm_zone->data,
-         (int)shm_zone->shm.name.len, shm_zone->shm.name.data, ctx->rate);
+  printf("shm.name %p -> %.*s - rate: %lu \n", ctx, (int)shm_zone->shm.name.len,
+         shm_zone->shm.name.data, ctx->rate);
 
-  rate_limit_values__init(&rate_limit_value);
+  rate_limit_zone__init(&rate_limit_zone);
 
   ngx_shmtx_lock(&ctx->shpool->mutex);
 
   if (ngx_queue_empty(&ctx->sh->queue)) {
     ngx_shmtx_unlock(&ctx->shpool->mutex);
-    return;
+    return NGX_HTTP_NO_CONTENT;
   }
 
   head = ngx_queue_head(&ctx->sh->queue);
   last = ngx_queue_last(head);
   q = head;
 
+  rate_limit_zone.n_ratelimits = count_queue_entries(head, last);
+  rate_limit_zone.ratelimits = ngx_palloc(pool, rate_limit_zone.n_ratelimits *
+                                                    sizeof(RateLimitValues *));
+  if (rate_limit_zone.ratelimits == NULL) {
+    return NGX_HTTP_INTERNAL_SERVER_ERROR;
+  }
+
   // retrieving current timestamp in milliseconds
   now = ngx_cached_time->sec * 1000 + ngx_cached_time->msec;
 
+  i = 0;
   while (q != last) {
     lr = ngx_queue_data(q, ngx_http_limit_req_node_t, queue);
     // retrieving current monotonic timestamp in milliseconds
@@ -207,15 +247,37 @@ static void dump_req_limit(ngx_shm_zone_t *shm_zone, BufferAppendToNginx *buf) {
              "%lu\n",
              str_addr, lr->excess, last_request_timestamp, now);
     }
-    rate_limit_value.key.len = lr->len;
-    rate_limit_value.key.data = lr->data;
-    rate_limit_value.excess = lr->excess;
-    rate_limit_value.last = last_request_timestamp;
 
-    rate_limit_values__pack_to_buffer(&rate_limit_value,
-                                      (ProtobufCBuffer *)buf);
+    rate_limit_value = ngx_palloc(pool, sizeof(RateLimitValues));
+    if (rate_limit_value == NULL) {
+      return NGX_HTTP_INTERNAL_SERVER_ERROR;
+    }
+    rate_limit_values__init(rate_limit_value);
+
+    rate_limit_value->key.len = lr->len;
+    rate_limit_value->key.data = lr->data;
+    rate_limit_value->excess = lr->excess;
+    rate_limit_value->last = last_request_timestamp;
+
+    rate_limit_zone.ratelimits[i] = rate_limit_value;
+
     q = q->next;
+    i++;
   }
 
+  rate_limit_zone__pack_to_buffer(&rate_limit_zone, (ProtobufCBuffer *)buf);
+
   ngx_shmtx_unlock(&ctx->shpool->mutex);
+
+  return NGX_OK;
+}
+
+static size_t count_queue_entries(ngx_queue_t *head, ngx_queue_t *last) {
+  ngx_queue_t *q = head;
+  size_t count = 0;
+  while (q != last) {
+    count++;
+    q = q->next;
+  }
+  return count;
 }
