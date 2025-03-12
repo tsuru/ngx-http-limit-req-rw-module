@@ -24,3 +24,5 @@ clean:
 run:
 	./build/sbin/nginx -c $(PWD)/nginx.conf
 
+debug:
+	cc -o main main.c ngx_http_limit_req_rw_message.pb-c.c -L/opt/homebrew/Cellar/protobuf-c/1.5.1/lib -lprotobuf-c  -I/opt/homebrew/Cellar/protobuf-c/1.5.1/include
