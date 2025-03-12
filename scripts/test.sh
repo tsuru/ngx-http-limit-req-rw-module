@@ -16,4 +16,4 @@ curl --parallel --parallel-immediate \
 
 echo "Last Request"
 
-curl "http://localhost:8888/api" --output out.bin
+curl "http://localhost:8888/api/one" -v --output out.bin
