@@ -97,51 +97,6 @@ void   rate_limit_zone__free_unpacked
   assert(message->base.descriptor == &rate_limit_zone__descriptor);
   protobuf_c_message_free_unpacked ((ProtobufCMessage*)message, allocator);
 }
-void   rate_limit_response__init
-                     (RateLimitResponse         *message)
-{
-  static const RateLimitResponse init_value = RATE_LIMIT_RESPONSE__INIT;
-  *message = init_value;
-}
-size_t rate_limit_response__get_packed_size
-                     (const RateLimitResponse *message)
-{
-  assert(message->base.descriptor == &rate_limit_response__descriptor);
-  return protobuf_c_message_get_packed_size ((const ProtobufCMessage*)(message));
-}
-size_t rate_limit_response__pack
-                     (const RateLimitResponse *message,
-                      uint8_t       *out)
-{
-  assert(message->base.descriptor == &rate_limit_response__descriptor);
-  return protobuf_c_message_pack ((const ProtobufCMessage*)message, out);
-}
-size_t rate_limit_response__pack_to_buffer
-                     (const RateLimitResponse *message,
-                      ProtobufCBuffer *buffer)
-{
-  assert(message->base.descriptor == &rate_limit_response__descriptor);
-  return protobuf_c_message_pack_to_buffer ((const ProtobufCMessage*)message, buffer);
-}
-RateLimitResponse *
-       rate_limit_response__unpack
-                     (ProtobufCAllocator  *allocator,
-                      size_t               len,
-                      const uint8_t       *data)
-{
-  return (RateLimitResponse *)
-     protobuf_c_message_unpack (&rate_limit_response__descriptor,
-                                allocator, len, data);
-}
-void   rate_limit_response__free_unpacked
-                     (RateLimitResponse *message,
-                      ProtobufCAllocator *allocator)
-{
-  if(!message)
-    return;
-  assert(message->base.descriptor == &rate_limit_response__descriptor);
-  protobuf_c_message_free_unpacked ((ProtobufCMessage*)message, allocator);
-}
 static const ProtobufCFieldDescriptor rate_limit_values__field_descriptors[3] =
 {
   {
@@ -206,23 +161,11 @@ const ProtobufCMessageDescriptor rate_limit_values__descriptor =
   (ProtobufCMessageInit) rate_limit_values__init,
   NULL,NULL,NULL    /* reserved[123] */
 };
-static const ProtobufCFieldDescriptor rate_limit_zone__field_descriptors[2] =
+static const ProtobufCFieldDescriptor rate_limit_zone__field_descriptors[1] =
 {
   {
-    "zone",
-    1,
-    PROTOBUF_C_LABEL_NONE,
-    PROTOBUF_C_TYPE_STRING,
-    0,   /* quantifier_offset */
-    offsetof(RateLimitZone, zone),
-    NULL,
-    &protobuf_c_empty_string,
-    0,             /* flags */
-    0,NULL,NULL    /* reserved1,reserved2, etc */
-  },
-  {
     "rateLimits",
-    2,
+    1,
     PROTOBUF_C_LABEL_REPEATED,
     PROTOBUF_C_TYPE_MESSAGE,
     offsetof(RateLimitZone, n_ratelimits),
@@ -234,13 +177,12 @@ static const ProtobufCFieldDescriptor rate_limit_zone__field_descriptors[2] =
   },
 };
 static const unsigned rate_limit_zone__field_indices_by_name[] = {
-  1,   /* field[1] = rateLimits */
-  0,   /* field[0] = zone */
+  0,   /* field[0] = rateLimits */
 };
 static const ProtobufCIntRange rate_limit_zone__number_ranges[1 + 1] =
 {
   { 1, 0 },
-  { 0, 2 }
+  { 0, 1 }
 };
 const ProtobufCMessageDescriptor rate_limit_zone__descriptor =
 {
@@ -250,48 +192,10 @@ const ProtobufCMessageDescriptor rate_limit_zone__descriptor =
   "RateLimitZone",
   "",
   sizeof(RateLimitZone),
-  2,
+  1,
   rate_limit_zone__field_descriptors,
   rate_limit_zone__field_indices_by_name,
   1,  rate_limit_zone__number_ranges,
   (ProtobufCMessageInit) rate_limit_zone__init,
-  NULL,NULL,NULL    /* reserved[123] */
-};
-static const ProtobufCFieldDescriptor rate_limit_response__field_descriptors[1] =
-{
-  {
-    "rateLimitZones",
-    1,
-    PROTOBUF_C_LABEL_REPEATED,
-    PROTOBUF_C_TYPE_MESSAGE,
-    offsetof(RateLimitResponse, n_ratelimitzones),
-    offsetof(RateLimitResponse, ratelimitzones),
-    &rate_limit_zone__descriptor,
-    NULL,
-    0,             /* flags */
-    0,NULL,NULL    /* reserved1,reserved2, etc */
-  },
-};
-static const unsigned rate_limit_response__field_indices_by_name[] = {
-  0,   /* field[0] = rateLimitZones */
-};
-static const ProtobufCIntRange rate_limit_response__number_ranges[1 + 1] =
-{
-  { 1, 0 },
-  { 0, 1 }
-};
-const ProtobufCMessageDescriptor rate_limit_response__descriptor =
-{
-  PROTOBUF_C__MESSAGE_DESCRIPTOR_MAGIC,
-  "RateLimitResponse",
-  "RateLimitResponse",
-  "RateLimitResponse",
-  "",
-  sizeof(RateLimitResponse),
-  1,
-  rate_limit_response__field_descriptors,
-  rate_limit_response__field_indices_by_name,
-  1,  rate_limit_response__number_ranges,
-  (ProtobufCMessageInit) rate_limit_response__init,
   NULL,NULL,NULL    /* reserved[123] */
 };

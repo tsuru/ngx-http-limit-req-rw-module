@@ -17,7 +17,6 @@ PROTOBUF_C__BEGIN_DECLS
 
 typedef struct RateLimitValues RateLimitValues;
 typedef struct RateLimitZone RateLimitZone;
-typedef struct RateLimitResponse RateLimitResponse;
 
 
 /* --- enums --- */
@@ -40,23 +39,11 @@ struct  RateLimitValues
 struct  RateLimitZone
 {
   ProtobufCMessage base;
-  char *zone;
   size_t n_ratelimits;
   RateLimitValues **ratelimits;
 };
 #define RATE_LIMIT_ZONE__INIT \
  { PROTOBUF_C_MESSAGE_INIT (&rate_limit_zone__descriptor) \
-, (char *)protobuf_c_empty_string, 0,NULL }
-
-
-struct  RateLimitResponse
-{
-  ProtobufCMessage base;
-  size_t n_ratelimitzones;
-  RateLimitZone **ratelimitzones;
-};
-#define RATE_LIMIT_RESPONSE__INIT \
- { PROTOBUF_C_MESSAGE_INIT (&rate_limit_response__descriptor) \
 , 0,NULL }
 
 
@@ -98,25 +85,6 @@ RateLimitZone *
 void   rate_limit_zone__free_unpacked
                      (RateLimitZone *message,
                       ProtobufCAllocator *allocator);
-/* RateLimitResponse methods */
-void   rate_limit_response__init
-                     (RateLimitResponse         *message);
-size_t rate_limit_response__get_packed_size
-                     (const RateLimitResponse   *message);
-size_t rate_limit_response__pack
-                     (const RateLimitResponse   *message,
-                      uint8_t             *out);
-size_t rate_limit_response__pack_to_buffer
-                     (const RateLimitResponse   *message,
-                      ProtobufCBuffer     *buffer);
-RateLimitResponse *
-       rate_limit_response__unpack
-                     (ProtobufCAllocator  *allocator,
-                      size_t               len,
-                      const uint8_t       *data);
-void   rate_limit_response__free_unpacked
-                     (RateLimitResponse *message,
-                      ProtobufCAllocator *allocator);
 /* --- per-message closures --- */
 
 typedef void (*RateLimitValues_Closure)
@@ -124,9 +92,6 @@ typedef void (*RateLimitValues_Closure)
                   void *closure_data);
 typedef void (*RateLimitZone_Closure)
                  (const RateLimitZone *message,
-                  void *closure_data);
-typedef void (*RateLimitResponse_Closure)
-                 (const RateLimitResponse *message,
                   void *closure_data);
 
 /* --- services --- */
@@ -136,7 +101,6 @@ typedef void (*RateLimitResponse_Closure)
 
 extern const ProtobufCMessageDescriptor rate_limit_values__descriptor;
 extern const ProtobufCMessageDescriptor rate_limit_zone__descriptor;
-extern const ProtobufCMessageDescriptor rate_limit_response__descriptor;
 
 PROTOBUF_C__END_DECLS
 
