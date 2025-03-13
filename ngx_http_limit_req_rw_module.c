@@ -77,10 +77,17 @@ static ngx_int_t ngx_http_limit_req_read_handler(ngx_http_request_t *r) {
   ngx_int_t rc;
   ngx_buf_t *b;
   ngx_chain_t out;
+  ngx_http_core_loc_conf_t* clcf;
 
   if (r->method != NGX_HTTP_GET) {
     return NGX_HTTP_NOT_ALLOWED;
   }
+
+  clcf = ngx_http_get_module_loc_conf(r, ngx_http_core_module);
+
+  printf("TODO: detect zone name by location suffix, location: %.*s, uri: %.*s\n", (int) clcf->name.len, clcf->name.data, (int) r->uri.len, r->uri.data);
+
+  printf("TODO: if empty zone name, show only zone names\n");
 
   strip_zone_name_from_uri(&r->uri, &zone_name);
   printf("ZoneName: %.*s", (int)zone_name.len, zone_name.data);
