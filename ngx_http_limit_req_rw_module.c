@@ -95,7 +95,7 @@ static ngx_int_t ngx_http_limit_req_read_handler(ngx_http_request_t *r) {
     return rc;
   }
 
-  ngx_str_set(&content_type, "application/protobuf");
+  ngx_str_set(&content_type, "application/vnd.msgpack");
   r->headers_out.content_type = content_type;
   printf("Content-Length: %lu\n", b->last - b->pos);
   r->headers_out.content_length_n = b->last - b->pos;
