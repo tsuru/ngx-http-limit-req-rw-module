@@ -8,11 +8,11 @@ curl --parallel --parallel-immediate \
   "http://localhost:8888/test"
 
 curl --parallel --parallel-immediate \
-  "http://192.168.0.7:8888/test" \
-  "http://192.168.0.7:8888/test" \
-  "http://192.168.0.7:8888/test" \
-  "http://192.168.0.7:8888/test" \
-  "http://192.168.0.7:8888/test"
+  "http://192.168.3.21:8888/test" \
+  "http://192.168.3.21:8888/test" \
+  "http://192.168.3.21:8888/test" \
+  "http://192.168.3.21:8888/test" \
+  "http://192.168.3.21:8888/test"
 
 echo "Last Request"
 

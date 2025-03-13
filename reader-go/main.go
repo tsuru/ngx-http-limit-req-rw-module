@@ -1,30 +1,23 @@
 package main
 
 import (
-	"bytes"
 	"fmt"
 	"io"
+	"os"
 
 	msgpack "github.com/vmihailenco/msgpack/v5"
 )
 
 func main() {
-	var buf bytes.Buffer
-
-	msgs := []any{
-		[]any{"hello", 1, 2},
-		[]any{"congratulations", 3, 1},
-	}
-
-	encoder := msgpack.NewEncoder(&buf)
-	for _, msg := range msgs {
-		encoder.Encode(msg)
-	}
-	fmt.Println("encoded bytes", buf.Bytes())
-
 	fmt.Println("starting decoding")
 
-	decoder := msgpack.NewDecoder(&buf)
+	f, err := os.Open("../out.bin")
+	if err != nil {
+		fmt.Println("error opening file", err)
+		return
+	}
+
+	decoder := msgpack.NewDecoder(f)
 	for {
 		var msg any
 		if err := decoder.Decode(&msg); err != nil {

@@ -41,6 +41,7 @@
 *.su
 *.idb
 *.pdb
+out.bin
 
 # Kernel Module Compile Results
 *.mod*
@@ -53,6 +54,7 @@ dkms.conf
 
 # Dev Files
 compile_commands.json
+.vscode/
 
 # nginx files
 build/
