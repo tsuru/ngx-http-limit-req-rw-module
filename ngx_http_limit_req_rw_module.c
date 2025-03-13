@@ -26,6 +26,7 @@ static ngx_int_t ngx_http_limit_req_read_handler(ngx_http_request_t *r);
 static char *ngx_http_limit_req_rw_handler(ngx_conf_t *cf, ngx_command_t *cmd,
                                            void *conf);
 static void strip_zone_name_from_uri(ngx_str_t *uri, ngx_str_t *zone_name);
+static ngx_int_t dump_rate_limit_zones(ngx_pool_t *pool, ngx_buf_t *b);
 static ngx_int_t dump_req_zone(ngx_pool_t *pool, ngx_buf_t *b,
                                ngx_str_t *zone_name);
 static ngx_int_t dump_req_limits(ngx_pool_t *pool, ngx_shm_zone_t *shm_zone,
@@ -85,19 +86,21 @@ static ngx_int_t ngx_http_limit_req_read_handler(ngx_http_request_t *r) {
 
   clcf = ngx_http_get_module_loc_conf(r, ngx_http_core_module);
 
-  printf("TODO: detect zone name by location suffix, location: %.*s, uri: %.*s\n", (int) clcf->name.len, clcf->name.data, (int) r->uri.len, r->uri.data);
-
-  printf("TODO: if empty zone name, show only zone names\n");
-
-  strip_zone_name_from_uri(&r->uri, &zone_name);
-  printf("ZoneName: %.*s", (int)zone_name.len, zone_name.data);
-
   b = ngx_create_temp_buf(r->pool, 1024 * 10);
   if (b == NULL) {
     return NGX_HTTP_INTERNAL_SERVER_ERROR;
   }
 
-  rc = dump_req_zone(r->pool, b, &zone_name);
+  // When request location is /api
+  if (clcf->name.len == r->uri.len) {
+    rc = dump_rate_limit_zones(r->pool, b);
+  // When request location is /api/{zone_name}
+  } else {
+    strip_zone_name_from_uri(&r->uri, &zone_name);
+    printf("ZoneName: %.*s", (int)zone_name.len, zone_name.data);
+    rc = dump_req_zone(r->pool, b, &zone_name);
+  }
+
   if (rc != NGX_OK) {
     return rc;
   }
@@ -147,6 +150,78 @@ static void strip_zone_name_from_uri(ngx_str_t *uri, ngx_str_t *zone_name) {
   }
 }
 
+static inline int msgpack_ngx_buf_write(void* data, const char* buf, size_t len)
+{
+  ngx_buf_t* b = (ngx_buf_t*)data;
+  b->last = ngx_cpymem(b->last, buf, len);
+  return 0;
+}
+
+static ngx_int_t dump_rate_limit_zones(ngx_pool_t *pool, ngx_buf_t *buf) {
+  ngx_array_t *zones;
+  ngx_str_t *zone_name;
+  ngx_uint_t i;
+  ngx_shm_zone_t *shm_zone;
+  volatile ngx_list_part_t *part;
+
+  if (ngx_cycle == NULL) {
+    printf("ngx_cycle is NULL\n");
+    return NGX_HTTP_INTERNAL_SERVER_ERROR;
+  }
+
+  msgpack_packer pk;
+  msgpack_packer_init(&pk, buf, msgpack_ngx_buf_write);
+  zones = ngx_array_create(pool, 0, sizeof(ngx_str_t));
+  if (zones == NULL) {
+    return NGX_HTTP_INTERNAL_SERVER_ERROR;
+  }
+
+  part = &ngx_cycle->shared_memory.part;
+  shm_zone = part->elts;
+
+  for (i = 0; /* void */; i++) {
+
+    if (i >= part->nelts) {
+      if (part->next == NULL) {
+        break;
+      }
+      part = part->next;
+      shm_zone = part->elts;
+      i = 0;
+    }
+
+    if (shm_zone == NULL) {
+      continue;
+    }
+
+    if (shm_zone[i].tag != &ngx_http_limit_req_module) {
+      continue;
+    }
+
+    zone_name = ngx_array_push(zones);
+    if (zone_name == NULL) {
+      return NGX_HTTP_INTERNAL_SERVER_ERROR;
+    }
+
+    zone_name->len = shm_zone[i].shm.name.len;
+    zone_name->data = ngx_pnalloc(pool, zone_name->len);
+    if (zone_name->data == NULL) {
+      zones->nelts--;
+      return NGX_HTTP_INTERNAL_SERVER_ERROR;
+    }
+    ngx_memcpy(zone_name->data, shm_zone[i].shm.name.data, zone_name->len);
+  }
+
+  msgpack_pack_array(&pk, zones->nelts);
+  zone_name = zones->elts;
+  for (i = 0; i < zones->nelts; i++) {
+    msgpack_pack_str(&pk, zone_name[i].len);
+    msgpack_pack_str_body(&pk, zone_name[i].data, zone_name[i].len);
+  }
+
+  return NGX_OK;
+}
+
 static ngx_int_t dump_req_zone(ngx_pool_t *pool, ngx_buf_t *b,
                                ngx_str_t *zone_name) {
   ngx_uint_t i;
@@ -186,13 +261,6 @@ static ngx_int_t dump_req_zone(ngx_pool_t *pool, ngx_buf_t *b,
     }
   }
   return NGX_HTTP_NOT_FOUND;
-}
-
-static inline int msgpack_ngx_buf_write(void* data, const char* buf, size_t len)
-{
-  ngx_buf_t* b = (ngx_buf_t*)data;
-  b->last = ngx_cpymem(b->last, buf, len);
-  return 0;
 }
 
 static ngx_int_t dump_req_limits(ngx_pool_t *pool, ngx_shm_zone_t *shm_zone,
