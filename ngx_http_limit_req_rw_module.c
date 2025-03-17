@@ -14,12 +14,12 @@ TODO: copyright
 #include <ngx_string.h>
 #include <ngx_times.h>
 #include <ngx_http.h>
+#include <ngx_log.h>
 #include <stdio.h>
 #include <time.h>
 #include <msgpack.h>
 
 #include "ngx_http_limit_req_module.h"
-#include "ngx_log.h"
 
 static ngx_int_t ngx_http_limit_req_read_handler(ngx_http_request_t *r);
 
