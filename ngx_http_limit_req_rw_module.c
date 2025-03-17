@@ -19,7 +19,7 @@ TODO: copyright
 #include <msgpack.h>
 
 #include "ngx_http_limit_req_module.h"
-
+#include "ngx_log.h"
 
 static ngx_int_t ngx_http_limit_req_read_handler(ngx_http_request_t *r);
 
@@ -78,7 +78,7 @@ static ngx_int_t ngx_http_limit_req_read_handler(ngx_http_request_t *r) {
   ngx_int_t rc;
   ngx_buf_t *b;
   ngx_chain_t out;
-  ngx_http_core_loc_conf_t* clcf;
+  ngx_http_core_loc_conf_t *clcf;
 
   if (r->method != NGX_HTTP_GET) {
     return NGX_HTTP_NOT_ALLOWED;
@@ -94,10 +94,11 @@ static ngx_int_t ngx_http_limit_req_read_handler(ngx_http_request_t *r) {
   // When request location is /api
   if (clcf->name.len == r->uri.len) {
     rc = dump_rate_limit_zones(r->pool, b);
-  // When request location is /api/{zone_name}
+    // When request location is /api/{zone_name}
   } else {
     strip_zone_name_from_uri(&r->uri, &zone_name);
-    printf("ZoneName: %.*s", (int)zone_name.len, zone_name.data);
+    ngx_log_debug2(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "zone name: %.*s",
+                   (int)zone_name.len, zone_name.data);
     rc = dump_req_zone(r->pool, b, &zone_name);
   }
 
@@ -107,7 +108,6 @@ static ngx_int_t ngx_http_limit_req_read_handler(ngx_http_request_t *r) {
 
   ngx_str_set(&content_type, "application/vnd.msgpack");
   r->headers_out.content_type = content_type;
-  printf("Content-Length: %lu\n", b->last - b->pos);
   r->headers_out.content_length_n = b->last - b->pos;
   r->headers_out.status = NGX_HTTP_OK; /* 200 OK */
 
@@ -118,12 +118,9 @@ static ngx_int_t ngx_http_limit_req_read_handler(ngx_http_request_t *r) {
   out.next = NULL;
 
   rc = ngx_http_send_header(r);
-  printf("RC: %li - headers only: %u - header sent %u\n", rc, r->header_only,
-         r->header_sent);
   if (rc == NGX_ERROR || rc > NGX_OK || r->header_only) {
     return rc;
   }
-  printf("Content-Length: %lu\n", b->last - b->pos);
 
   return ngx_http_output_filter(r, &out);
 }
@@ -150,9 +147,9 @@ static void strip_zone_name_from_uri(ngx_str_t *uri, ngx_str_t *zone_name) {
   }
 }
 
-static inline int msgpack_ngx_buf_write(void* data, const char* buf, size_t len)
-{
-  ngx_buf_t* b = (ngx_buf_t*)data;
+static inline int msgpack_ngx_buf_write(void *data, const char *buf,
+                                        size_t len) {
+  ngx_buf_t *b = (ngx_buf_t *)data;
   b->last = ngx_cpymem(b->last, buf, len);
   return 0;
 }
@@ -165,7 +162,6 @@ static ngx_int_t dump_rate_limit_zones(ngx_pool_t *pool, ngx_buf_t *buf) {
   volatile ngx_list_part_t *part;
 
   if (ngx_cycle == NULL) {
-    printf("ngx_cycle is NULL\n");
     return NGX_HTTP_INTERNAL_SERVER_ERROR;
   }
 
@@ -228,9 +224,7 @@ static ngx_int_t dump_req_zone(ngx_pool_t *pool, ngx_buf_t *b,
   ngx_shm_zone_t *shm_zone;
   volatile ngx_list_part_t *part;
 
-
   if (ngx_cycle == NULL) {
-    printf("ngx_cycle is NULL\n");
     return NGX_HTTP_INTERNAL_SERVER_ERROR;
   }
 
@@ -272,8 +266,9 @@ static ngx_int_t dump_req_limits(ngx_pool_t *pool, ngx_shm_zone_t *shm_zone,
   time_t now, now_monotonic, last_request_timestamp;
 
   ctx = shm_zone->data;
-  printf("shm.name %p -> %.*s - rate: %lu \n", ctx, (int)shm_zone->shm.name.len,
-         shm_zone->shm.name.data, ctx->rate);
+  ngx_log_debug4(
+      NGX_LOG_DEBUG_HTTP, ngx_cycle->log, 0, "shm.name %p -> %.*s - rate: %lu",
+      ctx, (int)shm_zone->shm.name.len, shm_zone->shm.name.data, ctx->rate);
 
   ngx_shmtx_lock(&ctx->shpool->mutex);
 
@@ -303,9 +298,10 @@ static ngx_int_t dump_req_limits(ngx_pool_t *pool, ngx_shm_zone_t *shm_zone,
     if (inet_ntop(AF_INET, lr->data, str_addr, sizeof(str_addr)) == NULL) {
       perror("inet_ntop");
     } else {
-      printf("key: %s - excess: %lu - last_request_timestamp: %lu - now(var): "
-             "%lu\n",
-             str_addr, lr->excess, last_request_timestamp, now);
+      ngx_log_debug4(
+          NGX_LOG_DEBUG_HTTP, ngx_cycle->log, 0,
+          "key: %s - excess: %lu - last_request_timestamp: %lu - now(var): %lu",
+          str_addr, lr->excess, last_request_timestamp, now)
     }
 
     msgpack_pack_array(&pk, 3);
@@ -317,7 +313,6 @@ static ngx_int_t dump_req_limits(ngx_pool_t *pool, ngx_shm_zone_t *shm_zone,
 
     q = q->next;
   }
-
 
   ngx_shmtx_unlock(&ctx->shpool->mutex);
 
