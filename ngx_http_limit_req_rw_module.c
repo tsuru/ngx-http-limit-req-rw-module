@@ -262,7 +262,6 @@ static ngx_int_t dump_req_limits(ngx_pool_t *pool, ngx_shm_zone_t *shm_zone,
   ngx_http_limit_req_ctx_t *ctx;
   ngx_queue_t *head, *q, *last;
   ngx_http_limit_req_node_t *lr;
-  char str_addr[INET_ADDRSTRLEN];
   time_t now, now_monotonic;
 
   now_monotonic = ngx_current_msec;
@@ -298,20 +297,6 @@ static ngx_int_t dump_req_limits(ngx_pool_t *pool, ngx_shm_zone_t *shm_zone,
 
   while (q != last) {
     lr = ngx_queue_data(q, ngx_http_limit_req_node_t, queue);
-    // retrieving current monotonic timestamp in milliseconds
-    now_monotonic = ngx_current_msec;
-    // calculate last request timestamp based on this equation:
-    // NOW - (NOW_MONOTONIC - LAST_MONOTONIC)
-
-    if (inet_ntop(AF_INET, lr->data, str_addr, sizeof(str_addr)) == NULL) {
-      perror("inet_ntop");
-    } else {
-      ngx_log_debug4(
-          NGX_LOG_DEBUG_HTTP, ngx_cycle->log, 0,
-          "key: %s - excess: %lu - last_request_timestamp: %lu - now(var): %lu",
-          str_addr, lr->excess, last_request_timestamp, now)
-    }
-
     msgpack_pack_array(&pk, 3);
 
     msgpack_pack_str(&pk, lr->len);
