@@ -2,11 +2,11 @@
 
 test_ip() {
   curl -v --parallel --parallel-immediate \
-  "http://$1:8888/test" \
-  "http://$1:8888/test" \
-  "http://$1:8888/test" \
-  "http://$1:8888/test" \
-  "http://$1:8888/test"
+  "http://$1:8888/$2" \
+  "http://$1:8888/$2" \
+  "http://$1:8888/$2" \
+  "http://$1:8888/$2" \
+  "http://$1:8888/$2"
 }
 
 echo "Detecting IP addresses on all network interfaces..."
@@ -29,7 +29,8 @@ if [[ "$(uname)" == "Darwin" ]]; then
             # Get IPv4 addresses
             ipv4=$(ifconfig $interface | grep inet | grep -v inet6 | awk '{print $2}')
             if [[ -n "$ipv4" ]]; then
-                test_ip $ipv4
+                test_ip $ipv4 "one"
+                test_ip $ipv4 "two"
             fi
         fi
     done
@@ -54,7 +55,8 @@ elif [[ "$(uname)" == "Linux" ]]; then
                     # Get IPv4 addresses
                     ipv4=$(ip -4 addr show dev $interface | grep inet | awk '{print $2}')
                     if [[ -n "$ipv4" ]]; then
-                        test_ip $ipv4
+                        test_ip $ipv4 "one"
+                        test_ip $ipv4 "two"
                     fi
                 fi
             fi
@@ -83,8 +85,9 @@ else
     exit 1
 fi
 
-test_ip "127.0.0.1"
+test_ip "127.0.0.1" "one"
 
 echo "API Request"
 
-curl "http://localhost:8888/api/one" -v --output out.bin
+curl "http://localhost:9000/api/one" -v --output one.bin
+curl "http://localhost:9000/api/two" -v --output two.bin

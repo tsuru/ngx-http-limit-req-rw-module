@@ -250,7 +250,7 @@ static ngx_int_t dump_req_zone(ngx_pool_t *pool, ngx_buf_t *b,
       continue;
     }
 
-    if (ngx_strcmp(zone_name, &shm_zone[i].shm.name) == 0) {
+    if (ngx_strncmp(zone_name->data, shm_zone[i].shm.name.data, shm_zone[i].shm.name.len) == 0) {
       return dump_req_limits(pool, &shm_zone[i], b);
     }
   }
