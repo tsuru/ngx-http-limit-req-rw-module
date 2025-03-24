@@ -1,4 +1,4 @@
-.PHONY: build clean download-nginx build-nginx configure build-module run debug
+.PHONY: build clean download-nginx build-nginx configure build-module run test debug
 
 build: clean download-nginx build-nginx
 
@@ -22,6 +22,10 @@ clean:
 run:
 	./build/sbin/nginx -c $(PWD)/nginx.conf
 
-debug:
+test:
 	./scripts/test.sh
-	cd reader-go; go run main.go
+
+debug:
+	cd ./reader-go; go build -o debugger main.go; mv ./debugger ..
+	./debugger one.bin
+	./debugger two.bin

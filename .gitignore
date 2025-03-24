@@ -41,7 +41,10 @@
 *.su
 *.idb
 *.pdb
+debugger
 out.bin
+one.bin
+two.bin
 
 # Kernel Module Compile Results
 *.mod*

@@ -263,9 +263,24 @@ static ngx_int_t dump_req_limits(ngx_pool_t *pool, ngx_shm_zone_t *shm_zone,
   ngx_queue_t *head, *q, *last;
   ngx_http_limit_req_node_t *lr;
   char str_addr[INET_ADDRSTRLEN];
-  time_t now, now_monotonic, last_request_timestamp;
+  time_t now, now_monotonic;
+
+  now_monotonic = ngx_current_msec;
+  // retrieving current timestamp in milliseconds
+  now = ngx_cached_time->sec * 1000 + ngx_cached_time->msec;
 
   ctx = shm_zone->data;
+
+  msgpack_packer pk;
+  msgpack_packer_init(&pk, buf, msgpack_ngx_buf_write);
+
+  // Including header
+  msgpack_pack_array(&pk, 3);
+  msgpack_pack_str(&pk, ctx->key.value.len);
+  msgpack_pack_str_body(&pk, ctx->key.value.data, ctx->key.value.len);
+  msgpack_pack_uint64(&pk, now);
+  msgpack_pack_uint64(&pk, now_monotonic);
+
   ngx_log_debug4(
       NGX_LOG_DEBUG_HTTP, ngx_cycle->log, 0, "shm.name %p -> %.*s - rate: %lu",
       ctx, (int)shm_zone->shm.name.len, shm_zone->shm.name.data, ctx->rate);
@@ -281,19 +296,12 @@ static ngx_int_t dump_req_limits(ngx_pool_t *pool, ngx_shm_zone_t *shm_zone,
   last = ngx_queue_last(head);
   q = head;
 
-  // retrieving current timestamp in milliseconds
-  now = ngx_cached_time->sec * 1000 + ngx_cached_time->msec;
-
-  msgpack_packer pk;
-  msgpack_packer_init(&pk, buf, msgpack_ngx_buf_write);
-
   while (q != last) {
     lr = ngx_queue_data(q, ngx_http_limit_req_node_t, queue);
     // retrieving current monotonic timestamp in milliseconds
     now_monotonic = ngx_current_msec;
     // calculate last request timestamp based on this equation:
     // NOW - (NOW_MONOTONIC - LAST_MONOTONIC)
-    last_request_timestamp = now - (now_monotonic - lr->last);
 
     if (inet_ntop(AF_INET, lr->data, str_addr, sizeof(str_addr)) == NULL) {
       perror("inet_ntop");
@@ -308,7 +316,7 @@ static ngx_int_t dump_req_limits(ngx_pool_t *pool, ngx_shm_zone_t *shm_zone,
 
     msgpack_pack_str(&pk, lr->len);
     msgpack_pack_str_body(&pk, lr->data, lr->len);
-    msgpack_pack_uint64(&pk, last_request_timestamp);
+    msgpack_pack_uint64(&pk, lr->last);
     msgpack_pack_int(&pk, lr->excess);
 
     q = q->next;
