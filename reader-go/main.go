@@ -59,4 +59,5 @@ func main() {
 	for _, entry := range entries {
 		fmt.Println(entry)
 	}
+  fmt.Println(len(entries))
 }
