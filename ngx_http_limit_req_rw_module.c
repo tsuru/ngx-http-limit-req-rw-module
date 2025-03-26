@@ -21,6 +21,8 @@ TODO: copyright
 
 #include "ngx_http_limit_req_module.h"
 
+const int MAX_NUMBER_OF_RATE_LIMIT_ELEMENTS = 30 * 1000;
+
 static ngx_int_t ngx_http_limit_req_read_handler(ngx_http_request_t *r);
 
 static char *ngx_http_limit_req_rw_handler(ngx_conf_t *cf, ngx_command_t *cmd,
@@ -28,9 +30,9 @@ static char *ngx_http_limit_req_rw_handler(ngx_conf_t *cf, ngx_command_t *cmd,
 static void strip_zone_name_from_uri(ngx_str_t *uri, ngx_str_t *zone_name);
 static ngx_int_t dump_rate_limit_zones(ngx_pool_t *pool, ngx_buf_t *b);
 static ngx_int_t dump_req_zone(ngx_pool_t *pool, ngx_buf_t *b,
-                               ngx_str_t *zone_name);
+                               ngx_str_t *zone_name, ngx_uint_t last_greater_equal);
 static ngx_int_t dump_req_limits(ngx_pool_t *pool, ngx_shm_zone_t *shm_zone,
-                                 ngx_buf_t *buf);
+                                 ngx_buf_t *buf, ngx_uint_t last_greater_equal);
 static ngx_command_t ngx_http_limit_req_rw_commands[] = {
     {ngx_string("limit_req_rw_handler"),
      NGX_HTTP_MAIN_CONF | NGX_HTTP_SRV_CONF | NGX_HTTP_LOC_CONF |
@@ -74,7 +76,8 @@ static ngx_int_t ngx_http_limit_req_handler(ngx_http_request_t *r) {
 }
 
 static ngx_int_t ngx_http_limit_req_read_handler(ngx_http_request_t *r) {
-  ngx_str_t content_type, zone_name;
+  ngx_str_t content_type, zone_name, last_greater_equal_arg;
+  ngx_int_t last_greater_equal;
   ngx_int_t rc;
   ngx_buf_t *b;
   ngx_chain_t out;
@@ -86,7 +89,7 @@ static ngx_int_t ngx_http_limit_req_read_handler(ngx_http_request_t *r) {
 
   clcf = ngx_http_get_module_loc_conf(r, ngx_http_core_module);
 
-  b = ngx_create_temp_buf(r->pool, 1024 * 10);
+  b = ngx_create_temp_buf(r->pool, 1024 * 1024);
   if (b == NULL) {
     return NGX_HTTP_INTERNAL_SERVER_ERROR;
   }
@@ -99,7 +102,17 @@ static ngx_int_t ngx_http_limit_req_read_handler(ngx_http_request_t *r) {
     strip_zone_name_from_uri(&r->uri, &zone_name);
     ngx_log_debug2(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "zone name: %.*s",
                    (int)zone_name.len, zone_name.data);
-    rc = dump_req_zone(r->pool, b, &zone_name);
+    last_greater_equal_arg.len = 0;
+    last_greater_equal = 0;
+    if (r->args.len) {
+      if (ngx_http_arg(r, (u_char *) "last_greater_equal", 18, &last_greater_equal_arg) == NGX_OK) {
+          last_greater_equal = ngx_atoi(last_greater_equal_arg.data, last_greater_equal_arg.len);
+          if (last_greater_equal == NGX_ERROR || last_greater_equal < 0) {
+              return NGX_HTTP_BAD_REQUEST;
+          }
+      }
+    }
+    rc = dump_req_zone(r->pool, b, &zone_name, (ngx_uint_t) last_greater_equal);
   }
 
   if (rc != NGX_OK) {
@@ -219,7 +232,7 @@ static ngx_int_t dump_rate_limit_zones(ngx_pool_t *pool, ngx_buf_t *buf) {
 }
 
 static ngx_int_t dump_req_zone(ngx_pool_t *pool, ngx_buf_t *b,
-                               ngx_str_t *zone_name) {
+                               ngx_str_t *zone_name, ngx_uint_t last_greater_equal) {
   ngx_uint_t i;
   ngx_shm_zone_t *shm_zone;
   volatile ngx_list_part_t *part;
@@ -251,18 +264,19 @@ static ngx_int_t dump_req_zone(ngx_pool_t *pool, ngx_buf_t *b,
     }
 
     if (ngx_strncmp(zone_name->data, shm_zone[i].shm.name.data, shm_zone[i].shm.name.len) == 0) {
-      return dump_req_limits(pool, &shm_zone[i], b);
+      return dump_req_limits(pool, &shm_zone[i], b, last_greater_equal);
     }
   }
   return NGX_HTTP_NOT_FOUND;
 }
 
 static ngx_int_t dump_req_limits(ngx_pool_t *pool, ngx_shm_zone_t *shm_zone,
-                                 ngx_buf_t *buf) {
+                                 ngx_buf_t *buf, ngx_uint_t last_greater_equal) {
   ngx_http_limit_req_ctx_t *ctx;
   ngx_queue_t *head, *q, *last;
   ngx_http_limit_req_node_t *lr;
   time_t now, now_monotonic;
+  int i;
 
   now_monotonic = ngx_current_msec;
   // retrieving current timestamp in milliseconds
@@ -295,8 +309,11 @@ static ngx_int_t dump_req_limits(ngx_pool_t *pool, ngx_shm_zone_t *shm_zone,
   last = ngx_queue_last(head);
   q = head;
 
-  while (q != last) {
+  for (i = 0; q != last && i < MAX_NUMBER_OF_RATE_LIMIT_ELEMENTS; i++) {
     lr = ngx_queue_data(q, ngx_http_limit_req_node_t, queue);
+    if (last_greater_equal != 0 && lr->last < last_greater_equal) {
+      break;
+    }
     msgpack_pack_array(&pk, 3);
 
     msgpack_pack_str(&pk, lr->len);
