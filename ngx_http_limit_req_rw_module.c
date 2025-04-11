@@ -302,7 +302,7 @@ static ngx_int_t dump_req_limits(ngx_pool_t *pool, ngx_shm_zone_t *shm_zone,
 
   if (ngx_queue_empty(&ctx->sh->queue)) {
     ngx_shmtx_unlock(&ctx->shpool->mutex);
-    return NGX_HTTP_NO_CONTENT;
+    return NGX_OK;
   }
 
   head = ngx_queue_head(&ctx->sh->queue);
