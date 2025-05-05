@@ -99,9 +99,14 @@ static ngx_int_t ngx_http_limit_req_read_handler(ngx_http_request_t *r) {
                   "ngx_http_limit_req_rw_module: clcf is NULL");
     return NGX_HTTP_INTERNAL_SERVER_ERROR;
   }
-  ngx_log_error(NGX_LOG_WARN, r->connection->log, 0, "Processing request for URI: %V", &r->uri);
+  ngx_log_error(NGX_LOG_WARN, r->connection->log, 0,
+                "ngx_http_limit_req_rw_module: Processing request for URI: %V", &r->uri);
+  ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
+                "ngx_http_limit_req_rw_module: clcf->name: %V", &clcf->name);
   // When request location is /api
   if (clcf->name.len == r->uri.len) {
+    ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
+                  "ngx_http_limit_req_rw_module: dumping rate limit zones");
     rc = dump_rate_limit_zones(r->pool, b);
     // When request location is /api/{zone_name}
   } else {
@@ -179,6 +184,9 @@ static ngx_int_t dump_rate_limit_zones(ngx_pool_t *pool, ngx_buf_t *buf) {
   ngx_uint_t i;
   ngx_shm_zone_t *shm_zone;
   volatile ngx_list_part_t *part;
+
+  ngx_log_error(NGX_LOG_DEBUG, ngx_cycle->log, 0,
+                "ngx_http_limit_req_rw_module: dump_rate_limit_zones called");
 
   if (ngx_cycle == NULL) {
     ngx_log_error(NGX_LOG_ERR, ngx_cycle->log, 0,
