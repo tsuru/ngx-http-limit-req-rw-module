@@ -94,6 +94,12 @@ static ngx_int_t ngx_http_limit_req_read_handler(ngx_http_request_t *r) {
     return NGX_HTTP_INTERNAL_SERVER_ERROR;
   }
 
+  if (clcf == NULL) {
+    ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                  "ngx_http_limit_req_rw_module: clcf is NULL");
+    return NGX_HTTP_INTERNAL_SERVER_ERROR;
+  }
+  ngx_log_error(NGX_LOG_WARN, r->connection->log, 0, "Processing request for URI: %V", &r->uri);
   // When request location is /api
   if (clcf->name.len == r->uri.len) {
     rc = dump_rate_limit_zones(r->pool, b);
@@ -175,6 +181,8 @@ static ngx_int_t dump_rate_limit_zones(ngx_pool_t *pool, ngx_buf_t *buf) {
   volatile ngx_list_part_t *part;
 
   if (ngx_cycle == NULL) {
+    ngx_log_error(NGX_LOG_ERR, ngx_cycle->log, 0,
+                  "ngx_http_limit_req_rw_module: ngx_cycle is NULL");
     return NGX_HTTP_INTERNAL_SERVER_ERROR;
   }
 
@@ -182,33 +190,47 @@ static ngx_int_t dump_rate_limit_zones(ngx_pool_t *pool, ngx_buf_t *buf) {
   msgpack_packer_init(&pk, buf, msgpack_ngx_buf_write);
   zones = ngx_array_create(pool, 0, sizeof(ngx_str_t));
   if (zones == NULL) {
+    ngx_log_error(NGX_LOG_ERR, ngx_cycle->log, 0,
+                  "ngx_http_limit_req_rw_module: failed to create zones array");
     return NGX_HTTP_INTERNAL_SERVER_ERROR;
   }
 
   part = &ngx_cycle->shared_memory.part;
+  ngx_log_error(NGX_LOG_DEBUG, ngx_cycle->log, 0,
+                "ngx_http_limit_req_rw_module: part->nelts %d", part->nelts);
   shm_zone = part->elts;
 
   for (i = 0; /* void */; i++) {
 
     if (i >= part->nelts) {
       if (part->next == NULL) {
+        ngx_log_error(NGX_LOG_DEBUG, ngx_cycle->log, 0,
+                      "ngx_http_limit_req_rw_module: part->next is NULL, breaking out of loop");
         break;
       }
+      ngx_log_error(NGX_LOG_DEBUG, ngx_cycle->log, 0,
+                    "ngx_http_limit_req_rw_module: part->next is not NULL, advancing");
       part = part->next;
       shm_zone = part->elts;
       i = 0;
     }
 
     if (shm_zone == NULL) {
+      ngx_log_error(NGX_LOG_DEBUG, ngx_cycle->log, 0,
+                    "ngx_http_limit_req_rw_module: shm_zone is NULL, continuing");
       continue;
     }
 
     if (shm_zone[i].tag != &ngx_http_limit_req_module) {
+      ngx_log_error(NGX_LOG_DEBUG, ngx_cycle->log, 0,
+                    "ngx_http_limit_req_rw_module: shm_zone tag is not limit_req_module, continuing");
       continue;
     }
 
     zone_name = ngx_array_push(zones);
     if (zone_name == NULL) {
+      ngx_log_error(NGX_LOG_ERR, ngx_cycle->log, 0,
+                    "ngx_http_limit_req_rw_module: failed to push zone name");
       return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
 
