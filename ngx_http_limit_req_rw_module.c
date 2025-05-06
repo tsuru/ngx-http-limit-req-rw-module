@@ -107,6 +107,10 @@ static ngx_int_t ngx_http_limit_req_read_handler(ngx_http_request_t *r) {
   if (clcf->name.len == r->uri.len) {
     ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
                   "ngx_http_limit_req_rw_module: dumping rate limit zones");
+    ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
+                  "ngx_http_limit_req_rw_module: r: %p", r);
+    ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
+                  "ngx_http_limit_req_rw_module: r->pool: %p", r->pool);
     rc = dump_rate_limit_zones(r->pool, b);
     // When request location is /api/{zone_name}
   } else {
