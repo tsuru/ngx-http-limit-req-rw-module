@@ -20,7 +20,7 @@ clean:
 	rm -rf nginx.tar.gz
 
 run:
-	./build/sbin/nginx -c $(PWD)/nginx.conf
+	./build/sbin/nginx -g "daemon off;" -c $(PWD)/nginx.conf
 
 test:
 	./scripts/test.sh

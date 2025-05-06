@@ -184,7 +184,7 @@ static inline int msgpack_ngx_buf_write(void *data, const char *buf,
 
 static ngx_int_t dump_rate_limit_zones(ngx_http_request_t *r, ngx_buf_t *buf) {
   ngx_array_t *zones;
-  ngx_str_t *zone_name;
+  ngx_str_t **zone_name;
   ngx_uint_t i;
   ngx_shm_zone_t *shm_zone;
   volatile ngx_list_part_t *part;
@@ -200,7 +200,7 @@ static ngx_int_t dump_rate_limit_zones(ngx_http_request_t *r, ngx_buf_t *buf) {
 
   msgpack_packer pk;
   msgpack_packer_init(&pk, buf, msgpack_ngx_buf_write);
-  zones = ngx_array_create(r->pool, 0, sizeof(ngx_str_t));
+  zones = ngx_array_create(r->pool, 0, sizeof(ngx_str_t*));
   if (zones == NULL) {
     ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
                   "ngx_http_limit_req_rw_module: failed to create zones array");
@@ -253,18 +253,10 @@ static ngx_int_t dump_rate_limit_zones(ngx_http_request_t *r, ngx_buf_t *buf) {
     }
 
     ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
-                  "ngx_http_limit_req_rw_module: copying shm name len to new zone struct");
-    zone_name->len = shm_zone[i].shm.name.len;
+                  "ngx_http_limit_req_rw_module: copying zone name");
+    *zone_name = &shm_zone[i].shm.name;
     ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
-                  "ngx_http_limit_req_rw_module: allocating memory for zone name string");
-    zone_name->data = ngx_pnalloc(r->pool, zone_name->len);
-    if (zone_name->data == NULL) {
-      zones->nelts--;
-      return NGX_HTTP_INTERNAL_SERVER_ERROR;
-    }
-    ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
-                  "ngx_http_limit_req_rw_module: copying zone name string");
-    ngx_memcpy(zone_name->data, shm_zone[i].shm.name.data, zone_name->len);
+                  "ngx_http_limit_req_rw_module: zone name copied");
   }
 
   ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
@@ -276,9 +268,9 @@ static ngx_int_t dump_rate_limit_zones(ngx_http_request_t *r, ngx_buf_t *buf) {
   for (i = 0; i < zones->nelts; i++) {
     ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
                   "ngx_http_limit_req_rw_module: packing zone name %.*s",
-                  (int)zone_name[i].len, zone_name[i].data);
-    msgpack_pack_str(&pk, zone_name[i].len);
-    msgpack_pack_str_body(&pk, zone_name[i].data, zone_name[i].len);
+                  (int)zone_name[i]->len, zone_name[i]->data);
+    msgpack_pack_str(&pk, zone_name[i]->len);
+    msgpack_pack_str_body(&pk, zone_name[i]->data, zone_name[i]->len);
   }
 
   return NGX_OK;
@@ -316,7 +308,11 @@ static ngx_int_t dump_req_zone(ngx_pool_t *pool, ngx_buf_t *b,
       continue;
     }
 
-    if (ngx_strncmp(zone_name->data, shm_zone[i].shm.name.data, shm_zone[i].shm.name.len) == 0) {
+    if (shm_zone[i].shm.name.len != zone_name->len) {
+      continue;
+    }
+
+    if (ngx_strncmp(zone_name->data, shm_zone[i].shm.name.data, zone_name->len) == 0) {
       return dump_req_limits(pool, &shm_zone[i], b, last_greater_equal);
     }
   }
