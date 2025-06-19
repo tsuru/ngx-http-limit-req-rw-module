@@ -29,3 +29,6 @@ debug:
 	cd ./reader-go; go build -o debugger main.go; mv ./debugger ..
 	./debugger one.bin
 	./debugger two.bin
+
+log-zone:
+	go run log_zone/main.go
