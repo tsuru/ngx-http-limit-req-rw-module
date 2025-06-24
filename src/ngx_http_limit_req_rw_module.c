@@ -81,8 +81,110 @@ static ngx_int_t ngx_http_limit_req_handler(ngx_http_request_t *r)
   return NGX_HTTP_SERVICE_UNAVAILABLE;
 }
 
+static void ngx_http_my_handler(ngx_http_request_t *r);
+
+typedef struct
+{
+  ngx_str_t Key;
+  uint64_t Last;
+  uint64_t Excess;
+} entities;
+
+static void ngx_http_my_handler(ngx_http_request_t *r)
+{
+  if (r->request_body == NULL || r->request_body->bufs == NULL)
+  {
+    ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "no request body found");
+    return;
+  }
+  ngx_chain_t *cl;
+  size_t len = 0;
+
+  for (cl = r->request_body->bufs; cl; cl = cl->next)
+  {
+    len += cl->buf->last - cl->buf->pos;
+  }
+  u_char *data = ngx_pnalloc(r->pool, len);
+  if (data == NULL)
+  {
+    ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "failed to allocate memory for request body");
+    return;
+  }
+
+  u_char *p = data;
+  for (cl = r->request_body->bufs; cl; cl = cl->next)
+  {
+    size_t size = cl->buf->last - cl->buf->pos;
+    ngx_memcpy(p, cl->buf->pos, size);
+    p += size;
+  }
+
+  msgpack_zone mempool;
+  msgpack_zone_init(&mempool, 2048);
+
+  msgpack_object deserialized;
+  msgpack_unpack((char *)data, len, NULL, &mempool, &deserialized);
+
+  if (deserialized.type == MSGPACK_OBJECT_ARRAY)
+  {
+    uint32_t size = deserialized.via.array.size;
+    msgpack_object *items = deserialized.via.array.ptr;
+
+    entities *arr = ngx_pnalloc(r->pool, size * sizeof(entities));
+    if (data == NULL)
+    {
+      ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "failed to allocate memory for array");
+      return;
+    }
+
+    for (uint32_t i = 1; i < items->via.array.size; i++)
+    {
+      uint32_t iItemSize = items[i].via.array.size;
+      msgpack_object iItemKey = items[i].via.array.ptr[0];
+      msgpack_object iItemLast = items[i].via.array.ptr[1];
+      msgpack_object iItemExcess = items[i].via.array.ptr[2];
+      arr[i - 1].Key.len = iItemKey.via.str.size;
+      u_char *keyData = ngx_palloc(r->pool, iItemKey.via.str.size);
+      if (keyData == NULL)
+      {
+        ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "failed to allocate memory for key");
+        return;
+      }
+      ngx_memcpy(keyData, iItemKey.via.str.ptr, iItemKey.via.str.size);
+      arr[i - 1].Key.data = keyData;
+      arr[i - 1].Last = iItemLast.via.u64;
+      arr[i - 1].Excess = iItemExcess.via.u64;
+
+      ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                    "Key [%d] value: %*s", i, arr[i - 1].Key);
+      ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                    "Last [%d] value: %ul", i, arr[i - 1].Last);
+      ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                    "Excess [%d] value: %ul", i, arr[i - 1].Excess);
+    }
+  }
+
+  msgpack_zone_destroy(&mempool);
+
+  ngx_str_t response = ngx_string("logged\n");
+  r->headers_out.status = NGX_HTTP_OK;
+  r->headers_out.content_length_n = response.len;
+  ngx_http_send_header(r);
+
+  ngx_buf_t *b = ngx_create_temp_buf(r->pool, response.len);
+  ngx_memcpy(b->pos, response.data, response.len);
+  b->last = b->pos + response.len;
+  b->last_buf = 1;
+
+  ngx_chain_t out = {.buf = b, .next = NULL};
+  ngx_http_output_filter(r, &out);
+}
+
 static ngx_int_t ngx_http_limit_req_write_handler(ngx_http_request_t *r)
 {
+  r->request_body_in_single_buf = 1;
+  return ngx_http_read_client_request_body(r, ngx_http_my_handler);
+
   ngx_str_t zone_name;
   ngx_shm_zone_t *shm_zone;
   volatile ngx_list_part_t *part;
@@ -126,6 +228,7 @@ static ngx_int_t ngx_http_limit_req_write_handler(ngx_http_request_t *r)
     }
 
     ngx_http_limit_req_ctx_t *ctx = shm_zone[i].data;
+    ngx_shmtx_lock(&ctx->shpool->mutex);
 
     struct in_addr addr;
     inet_pton(AF_INET, "127.0.0.1", &addr); // TODO: Replace with actual client IP retrieval logic
@@ -135,13 +238,10 @@ static ngx_int_t ngx_http_limit_req_write_handler(ngx_http_request_t *r)
 
     uint32_t hash = ngx_crc32_short(key.data, key.len);
 
-    ngx_shmtx_lock(&ctx->shpool->mutex);
-
     ngx_rbtree_node_t *node = ctx->sh->rbtree.root;
     ngx_rbtree_node_t *sentinel = ctx->sh->rbtree.sentinel;
     ngx_http_limit_req_node_t *lr = NULL;
     int found = 0;
-
     while (node != sentinel)
     {
       if (hash < node->key)
@@ -227,13 +327,7 @@ static ngx_int_t ngx_http_limit_req_read_handler(ngx_http_request_t *r)
   ngx_chain_t out;
   ngx_http_core_loc_conf_t *clcf;
 
-  if (r->method != NGX_HTTP_GET)
-  {
-    return NGX_HTTP_NOT_ALLOWED;
-  }
-
   clcf = ngx_http_get_module_loc_conf(r, ngx_http_core_module);
-
   b = ngx_create_temp_buf(r->pool, 1024 * 1024);
   if (b == NULL)
   {
