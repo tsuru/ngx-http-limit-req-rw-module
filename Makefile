@@ -30,5 +30,8 @@ debug:
 	./debugger one.bin
 	./debugger two.bin
 
-log-zone:
-	go run log_zone/main.go
+log:
+	go run log_zone/*.go log
+
+send:
+	go run log_zone/*.go send
