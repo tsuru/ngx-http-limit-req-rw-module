@@ -23,6 +23,26 @@ TODO: copyright
 
 const int MAX_NUMBER_OF_RATE_LIMIT_ELEMENTS = 30 * 1000;
 
+typedef struct
+{
+  ngx_str_t Key;
+  uint64_t Last;
+  uint64_t Excess;
+} entities;
+
+typedef struct
+{
+  ngx_str_t Key;         // Key of the rate limit zone
+  uint64_t Now;          // Current timestamp in milliseconds
+  uint64_t NowMonotonic; // Current monotonic timestamp in milliseconds
+} header;
+
+typedef struct
+{
+  header *Header;     // Header information
+  entities *Entities; // Array of entities
+} ngx_zone_data_t;
+
 static ngx_int_t ngx_http_limit_req_read_handler(ngx_http_request_t *r);
 static ngx_int_t ngx_http_limit_req_write_handler(ngx_http_request_t *r);
 
@@ -81,21 +101,13 @@ static ngx_int_t ngx_http_limit_req_handler(ngx_http_request_t *r)
   return NGX_HTTP_SERVICE_UNAVAILABLE;
 }
 
-static void ngx_http_my_handler(ngx_http_request_t *r);
-
-typedef struct
-{
-  ngx_str_t Key;
-  uint64_t Last;
-  uint64_t Excess;
-} entities;
-
-static void ngx_http_my_handler(ngx_http_request_t *r)
+static ngx_zone_data_t *ngx_decode_msg_pack(ngx_http_request_t *r);
+static ngx_zone_data_t *ngx_decode_msg_pack(ngx_http_request_t *r)
 {
   if (r->request_body == NULL || r->request_body->bufs == NULL)
   {
     ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "no request body found");
-    return;
+    return NULL;
   }
   ngx_chain_t *cl;
   size_t len = 0;
@@ -108,7 +120,7 @@ static void ngx_http_my_handler(ngx_http_request_t *r)
   if (data == NULL)
   {
     ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "failed to allocate memory for request body");
-    return;
+    return NULL;
   }
 
   u_char *p = data;
@@ -130,16 +142,49 @@ static void ngx_http_my_handler(ngx_http_request_t *r)
     uint32_t size = deserialized.via.array.size;
     msgpack_object *items = deserialized.via.array.ptr;
 
+    header *hdr = ngx_pnalloc(r->pool, sizeof(header));
+    if (hdr == NULL)
+    {
+      ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "failed to allocate memory for header");
+      return NULL;
+    }
+
+    if (items->via.array.size >= 1)
+    {
+      msgpack_object hdrKey = items[0].via.array.ptr[0];
+      msgpack_object hdrNow = items[0].via.array.ptr[1];
+      msgpack_object hdrNowMonotonic = items[0].via.array.ptr[2];
+
+      hdr->Key.len = hdrKey.via.str.size;
+      u_char *keyData = ngx_palloc(r->pool, hdrKey.via.str.size);
+      if (keyData == NULL)
+      {
+        ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "failed to allocate memory for key");
+        return NULL;
+      }
+      ngx_memcpy(keyData, hdrKey.via.str.ptr, hdrKey.via.str.size);
+      hdr->Key.data = keyData;
+      hdr->Now = hdrNow.via.u64;
+      hdr->NowMonotonic = hdrNowMonotonic.via.u64;
+
+      ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                    "Header Key value: %*s", hdr->Key);
+      ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                    "Header Now value: %ul", hdr->Now);
+      ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                    "Header NowMonotonic value: %ul", hdr->NowMonotonic);
+    }
+    ngx_zone_data_t *output = ngx_pnalloc(r->pool, sizeof(ngx_zone_data_t));
+    output->Header = hdr;
+
     entities *arr = ngx_pnalloc(r->pool, size * sizeof(entities));
     if (data == NULL)
     {
       ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "failed to allocate memory for array");
-      return;
+      return NULL;
     }
-
     for (uint32_t i = 1; i < items->via.array.size; i++)
     {
-      uint32_t iItemSize = items[i].via.array.size;
       msgpack_object iItemKey = items[i].via.array.ptr[0];
       msgpack_object iItemLast = items[i].via.array.ptr[1];
       msgpack_object iItemExcess = items[i].via.array.ptr[2];
@@ -148,7 +193,7 @@ static void ngx_http_my_handler(ngx_http_request_t *r)
       if (keyData == NULL)
       {
         ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "failed to allocate memory for key");
-        return;
+        return NULL;
       }
       ngx_memcpy(keyData, iItemKey.via.str.ptr, iItemKey.via.str.size);
       arr[i - 1].Key.data = keyData;
@@ -162,28 +207,21 @@ static void ngx_http_my_handler(ngx_http_request_t *r)
       ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
                     "Excess [%d] value: %ul", i, arr[i - 1].Excess);
     }
+    output->Entities = arr;
+    msgpack_zone_destroy(&mempool);
+    return output;
   }
-
   msgpack_zone_destroy(&mempool);
-
-  ngx_str_t response = ngx_string("logged\n");
-  r->headers_out.status = NGX_HTTP_OK;
-  r->headers_out.content_length_n = response.len;
-  ngx_http_send_header(r);
-
-  ngx_buf_t *b = ngx_create_temp_buf(r->pool, response.len);
-  ngx_memcpy(b->pos, response.data, response.len);
-  b->last = b->pos + response.len;
-  b->last_buf = 1;
-
-  ngx_chain_t out = {.buf = b, .next = NULL};
-  ngx_http_output_filter(r, &out);
+  return NULL;
 }
 
 static ngx_int_t ngx_http_limit_req_write_handler(ngx_http_request_t *r)
 {
   r->request_body_in_single_buf = 1;
-  return ngx_http_read_client_request_body(r, ngx_http_my_handler);
+  ngx_zone_data_t *msg_pack = ngx_decode_msg_pack(r);
+
+  ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
+                "ngx_http_limit_req_rw_module: msg_pack is %p", msg_pack);
 
   ngx_str_t zone_name;
   ngx_shm_zone_t *shm_zone;
