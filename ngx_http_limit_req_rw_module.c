@@ -19,7 +19,7 @@ TODO: copyright
 #include <time.h>
 #include <msgpack.h>
 
-#include "./includes/ngx_http_limit_req_module.h"
+#include "ngx_http_limit_req_module.h"
 
 const int MAX_NUMBER_OF_RATE_LIMIT_ELEMENTS = 30 * 1000;
 
