@@ -43,8 +43,10 @@ typedef struct
   entities *Entities; // Array of entities
 } ngx_zone_data_t;
 
+static ngx_zone_data_t *ngx_decode_msg_pack(ngx_http_request_t *r);
+
 static ngx_int_t ngx_http_limit_req_read_handler(ngx_http_request_t *r);
-static ngx_int_t ngx_http_limit_req_write_handler(ngx_http_request_t *r);
+static void ngx_http_limit_req_write_handler(ngx_http_request_t *r);
 
 static char *ngx_http_limit_req_rw_handler(ngx_conf_t *cf, ngx_command_t *cmd,
                                            void *conf);
@@ -96,19 +98,23 @@ static ngx_int_t ngx_http_limit_req_handler(ngx_http_request_t *r)
   }
   if (r->method == NGX_HTTP_POST)
   {
-    return ngx_http_limit_req_write_handler(r);
+    r->request_body_in_single_buf = 1;
+    return ngx_http_read_client_request_body(r, ngx_http_limit_req_write_handler);
   }
   return NGX_HTTP_SERVICE_UNAVAILABLE;
 }
 
-static ngx_zone_data_t *ngx_decode_msg_pack(ngx_http_request_t *r);
 static ngx_zone_data_t *ngx_decode_msg_pack(ngx_http_request_t *r)
 {
+  ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
+                "ngx_http_limit_req_rw_module: start decoding msgpack");
+  ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0, "0.0");
   if (r->request_body == NULL || r->request_body->bufs == NULL)
   {
     ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "no request body found");
     return NULL;
   }
+  ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0, "1111111");
   ngx_chain_t *cl;
   size_t len = 0;
 
@@ -116,13 +122,14 @@ static ngx_zone_data_t *ngx_decode_msg_pack(ngx_http_request_t *r)
   {
     len += cl->buf->last - cl->buf->pos;
   }
+  ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0, "2");
   u_char *data = ngx_pnalloc(r->pool, len);
   if (data == NULL)
   {
     ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "failed to allocate memory for request body");
     return NULL;
   }
-
+  ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0, "3");
   u_char *p = data;
   for (cl = r->request_body->bufs; cl; cl = cl->next)
   {
@@ -130,13 +137,14 @@ static ngx_zone_data_t *ngx_decode_msg_pack(ngx_http_request_t *r)
     ngx_memcpy(p, cl->buf->pos, size);
     p += size;
   }
-
+  ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0, "4");
   msgpack_zone mempool;
   msgpack_zone_init(&mempool, 2048);
 
   msgpack_object deserialized;
   msgpack_unpack((char *)data, len, NULL, &mempool, &deserialized);
-
+  ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
+                "ngx_http_limit_req_rw_module: deserialized type: %d", deserialized.type);
   if (deserialized.type == MSGPACK_OBJECT_ARRAY)
   {
     uint32_t size = deserialized.via.array.size;
@@ -154,7 +162,8 @@ static ngx_zone_data_t *ngx_decode_msg_pack(ngx_http_request_t *r)
       msgpack_object hdrKey = items[0].via.array.ptr[0];
       msgpack_object hdrNow = items[0].via.array.ptr[1];
       msgpack_object hdrNowMonotonic = items[0].via.array.ptr[2];
-
+      ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                    "Header Key type: %d", hdrKey.type);
       hdr->Key.len = hdrKey.via.str.size;
       u_char *keyData = ngx_palloc(r->pool, hdrKey.via.str.size);
       if (keyData == NULL)
@@ -215,13 +224,13 @@ static ngx_zone_data_t *ngx_decode_msg_pack(ngx_http_request_t *r)
   return NULL;
 }
 
-static ngx_int_t ngx_http_limit_req_write_handler(ngx_http_request_t *r)
+static void ngx_http_limit_req_write_handler(ngx_http_request_t *r)
 {
   r->request_body_in_single_buf = 1;
   ngx_zone_data_t *msg_pack = ngx_decode_msg_pack(r);
 
   ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
-                "ngx_http_limit_req_rw_module: msg_pack is %p", msg_pack);
+                "ngx_http_limit_req_rw_module: msg_pack is %*s", msg_pack->Header->Key);
 
   ngx_str_t zone_name;
   ngx_shm_zone_t *shm_zone;
@@ -310,7 +319,7 @@ static ngx_int_t ngx_http_limit_req_write_handler(ngx_http_request_t *r)
       {
         ngx_shmtx_unlock(&ctx->shpool->mutex);
         ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "failed to allocate memory for rate limit node");
-        return NGX_HTTP_INTERNAL_SERVER_ERROR;
+        r->headers_out.status = NGX_HTTP_INTERNAL_SERVER_ERROR;
       }
       node->key = hash;
       lr = (ngx_http_limit_req_node_t *)&node->color;
@@ -335,13 +344,12 @@ static ngx_int_t ngx_http_limit_req_write_handler(ngx_http_request_t *r)
     ngx_int_t rc = ngx_http_send_header(r);
     if (rc == NGX_ERROR || rc > NGX_OK || r->header_only)
     {
-      return rc;
+      r->headers_out.status = NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
-
     ngx_buf_t *b = ngx_create_temp_buf(r->pool, response.len);
     if (b == NULL)
     {
-      return NGX_HTTP_INTERNAL_SERVER_ERROR;
+      r->headers_out.status = NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
     ngx_memcpy(b->pos, response.data, response.len);
     b->last = b->pos + response.len;
@@ -351,9 +359,21 @@ static ngx_int_t ngx_http_limit_req_write_handler(ngx_http_request_t *r)
     out.buf = b;
     out.next = NULL;
 
-    return ngx_http_output_filter(r, &out);
+    ngx_http_output_filter(r, &out);
   }
-  return NGX_HTTP_NOT_FOUND;
+
+  ngx_str_t response = ngx_string("logged\n");
+  r->headers_out.status = NGX_HTTP_OK;
+  r->headers_out.content_length_n = response.len;
+  ngx_http_send_header(r);
+
+  ngx_buf_t *b = ngx_create_temp_buf(r->pool, response.len);
+  ngx_memcpy(b->pos, response.data, response.len);
+  b->last = b->pos + response.len;
+  b->last_buf = 1;
+
+  ngx_chain_t out = {.buf = b, .next = NULL};
+  ngx_http_output_filter(r, &out);
 }
 
 static ngx_int_t ngx_http_limit_req_read_handler(ngx_http_request_t *r)
