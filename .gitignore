@@ -1,6 +1,9 @@
 # Prerequisites
 *.d
 
+# Cache
+.cache
+
 # Object files
 *.o
 *.ko

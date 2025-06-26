@@ -3,7 +3,27 @@ ngx_module_type=HTTP
 ngx_module_name=ngx_http_limit_req_rw_module
 ngx_module_srcs="$ngx_addon_dir/ngx_http_limit_req_rw_module.c"
 
-CFLAGS="$CFLAGS `pkg-config --cflags 'msgpack-c = 6.1.0'`"
-CORE_LIBS="$CORE_LIBS `pkg-config --libs 'msgpack-c = 6.1.0'`"
+# Detect platform
+OS_NAME="$(uname -s)"
+
+# Default values
+MSGPACK_PKG_NAME=""
+MSGPACK_VERSION=""
+
+# Try to detect msgpack library
+if pkg-config --exists 'msgpack-c'; then
+    MSGPACK_PKG_NAME="msgpack-c"
+    MSGPACK_VERSION="6.1.0"  # Optional: only enforce version if strictly necessary
+elif pkg-config --exists 'msgpack'; then
+    MSGPACK_PKG_NAME="msgpack"
+    MSGPACK_VERSION="3.1.0"
+else
+    echo "Error: Neither 'msgpack-c' nor 'msgpack' pkg-config package found."
+    exit 1
+fi
+
+# Add flags
+CFLAGS="$CFLAGS $(pkg-config --cflags "$MSGPACK_PKG_NAME")"
+CORE_LIBS="$CORE_LIBS $(pkg-config --libs "$MSGPACK_PKG_NAME")"
 
 . auto/module
