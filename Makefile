@@ -1,6 +1,8 @@
 .PHONY: build clean download-nginx build-nginx configure build-module run test debug
 
-build: clean download-nginx build-nginx
+setup: clean download-nginx configure
+
+build: build-nginx build-module
 
 download-nginx:
 	curl https://nginx.org/download/nginx-1.26.3.tar.gz > nginx.tar.gz
@@ -9,7 +11,7 @@ download-nginx:
 configure:
 	cd nginx-1.26.3 && ./configure --prefix=$(PWD)/build --add-dynamic-module=..
 
-build-nginx: configure
+build-nginx:
 	cd nginx-1.26.3 && make && make install
 
 build-module:

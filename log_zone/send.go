@@ -49,6 +49,7 @@ func sendRequest(zone string, header RateLimitHeader, entries []RateLimitEntry) 
 	if err != nil {
 		return fmt.Errorf("error sending request to %s: %w", endpoint, err)
 	}
+	fmt.Println(resp.Status)
 	defer resp.Body.Close()
 	respBody, _ := io.ReadAll(resp.Body)
 	logrus.Infof("response status: %s, body: %s", resp.Status, respBody)
