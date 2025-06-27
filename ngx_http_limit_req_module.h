@@ -1,7 +1,6 @@
 /*
- * Copyright (C) Igor Sysoev
- * Copyright (C) Nginx, Inc.
- */
+TODO: copyright
+*/
 
 #include <ngx_core.h>
 #include <ngx_http.h>
