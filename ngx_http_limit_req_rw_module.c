@@ -129,14 +129,14 @@ static ngx_int_t ngx_decode_msg_pack(ngx_http_request_t *r,
   msgpack_zone_init(&mempool, 2048);
 
   msgpack_unpack((char *)data, len, NULL, &mempool, &deserialized);
-  ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
-                "ngx_http_limit_req_rw_module: deserialized type: %d",
-                deserialized.type);
+  ngx_log_error(
+      NGX_LOG_DEBUG, r->connection->log, 0,
+      "ngx_http_limit_req_rw_module: deserialized type: %d - size: %d",
+      deserialized.type, deserialized.via.array.size);
   if (deserialized.type != MSGPACK_OBJECT_ARRAY) {
     msgpack_zone_destroy(&mempool);
     return NGX_HTTP_INTERNAL_SERVER_ERROR;
   }
-
   deserialized_size = deserialized.via.array.size;
   msgpack_object *items = deserialized.via.array.ptr;
 
@@ -151,8 +151,6 @@ static ngx_int_t ngx_decode_msg_pack(ngx_http_request_t *r,
     msgpack_object hdrKey = items[0].via.array.ptr[0];
     msgpack_object hdrNow = items[0].via.array.ptr[1];
     msgpack_object hdrNowMonotonic = items[0].via.array.ptr[2];
-    ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "Header Key type: %d",
-                  hdrKey.type);
     hdr->Key.len = hdrKey.via.str.size;
     u_char *keyData = ngx_palloc(r->pool, hdrKey.via.str.size);
     if (keyData == NULL) {
@@ -164,28 +162,25 @@ static ngx_int_t ngx_decode_msg_pack(ngx_http_request_t *r,
     hdr->Key.data = keyData;
     hdr->Now = hdrNow.via.u64;
     hdr->NowMonotonic = hdrNowMonotonic.via.u64;
-
-    ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "Header Key value: %*s",
-                  hdr->Key);
-    ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "Header Now value: %ul",
-                  hdr->Now);
-    ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
-                  "Header NowMonotonic value: %ul", hdr->NowMonotonic);
   }
   ngx_zone_data->Header = hdr;
 
   entities *arr = ngx_pnalloc(r->pool, deserialized_size * sizeof(entities));
-  ngx_zone_data->EntitiesSize = items->via.array.size;
-  if (data == NULL) {
-    ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
-                  "failed to allocate memory for array");
-    return NGX_HTTP_INTERNAL_SERVER_ERROR;
-  }
-  for (uint32_t i = 1; i < items->via.array.size; i++) {
+  ngx_zone_data->EntitiesSize = deserialized_size - 1;
+  ngx_zone_data->Entities = arr;
+
+  for (uint32_t i = 1; i < deserialized_size; i++) {
+    if (items[i].via.array.size != 3) {
+      ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                    "invalid number of items in array at index %d", i);
+      msgpack_zone_destroy(&mempool);
+      return NGX_HTTP_INTERNAL_SERVER_ERROR;
+    }
+
     msgpack_object iItemKey = items[i].via.array.ptr[0];
     msgpack_object iItemLast = items[i].via.array.ptr[1];
     msgpack_object iItemExcess = items[i].via.array.ptr[2];
-    arr[i - 1].Key.len = iItemKey.via.str.size;
+
     u_char *keyData = ngx_palloc(r->pool, iItemKey.via.str.size);
     if (keyData == NULL) {
       ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
@@ -193,18 +188,12 @@ static ngx_int_t ngx_decode_msg_pack(ngx_http_request_t *r,
       return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
     ngx_memcpy(keyData, iItemKey.via.str.ptr, iItemKey.via.str.size);
+
+    arr[i - 1].Key.len = iItemKey.via.str.size;
     arr[i - 1].Key.data = keyData;
     arr[i - 1].Last = iItemLast.via.u64;
     arr[i - 1].Excess = iItemExcess.via.u64;
-
-    ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "Key [%d] value: %*s", i,
-                  arr[i - 1].Key);
-    ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "Last [%d] value: %ul", i,
-                  arr[i - 1].Last);
-    ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "Excess [%d] value: %ul",
-                  i, arr[i - 1].Excess);
   }
-  ngx_zone_data->Entities = arr;
   msgpack_zone_destroy(&mempool);
   return NGX_OK;
 }
@@ -234,11 +223,16 @@ static void ngx_http_limit_req_write_post_handler(ngx_http_request_t *r) {
 }
 
 static ngx_int_t ngx_http_limit_req_write_handler(ngx_http_request_t *r) {
-  ngx_int_t rc;
+  ngx_int_t rc, found;
   ngx_zone_data_t *msg_pack = NULL;
   ngx_str_t zone_name;
   ngx_shm_zone_t *shm_zone;
   ngx_http_limit_req_ctx_t *ctx;
+  ngx_str_t key;
+  size_t size;
+  uint32_t hash;
+  ngx_rbtree_node_t *node, *sentinel;
+  ngx_http_limit_req_node_t *lr;
 
   if (r != r->main) {
     return NGX_DECLINED;
@@ -251,49 +245,36 @@ static ngx_int_t ngx_http_limit_req_write_handler(ngx_http_request_t *r) {
         "ngx_http_limit_req_rw_module: failed to allocate memory for msg_pack");
     return NGX_HTTP_INTERNAL_SERVER_ERROR;
   }
+
   rc = ngx_decode_msg_pack(r, msg_pack);
   if (rc != NGX_OK) {
     return rc;
   }
 
+  strip_zone_name_from_uri(&r->uri, &zone_name);
+  shm_zone = find_rate_limit_shm_zone_by_name(r, zone_name);
+  if (shm_zone == NULL) {
+    ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                  "ngx_http_limit_req_rw_module: rate limit zone %*s not found",
+                  zone_name);
+    return NGX_HTTP_NOT_FOUND;
+  }
+
+  ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
+                "ngx_http_limit_req_rw_module: Header Key: %*s",
+                msg_pack->Header->Key);
   for (uint32_t i = 0; i < msg_pack->EntitiesSize; i++) {
-    ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
-                  "ngx_http_limit_req_rw_module: Entity Key: %*s, Last: %ul, "
-                  "Excess: %ul",
-                  msg_pack->Entities[i].Key, msg_pack->Entities[i].Last,
-                  msg_pack->Entities[i].Excess);
-
-    ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
-                  "ngx_http_limit_req_rw_module: Header Key: %*s",
-                  msg_pack->Header->Key);
-
-    strip_zone_name_from_uri(&r->uri, &zone_name);
-    shm_zone = find_rate_limit_shm_zone_by_name(r, zone_name);
-    if (shm_zone == NULL) {
-      ngx_log_error(
-          NGX_LOG_ERR, r->connection->log, 0,
-          "ngx_http_limit_req_rw_module: rate limit zone %*s not found",
-          zone_name);
-      return NGX_HTTP_NOT_FOUND;
-    }
-
     ctx = shm_zone->data;
     ngx_shmtx_lock(&ctx->shpool->mutex);
 
-    struct in_addr addr;
-    const char *str = (const char *)msg_pack->Entities[i].Key.data;
-    inet_pton(AF_INET, str,
-              &addr); // TODO: Replace with actual client IP retrieval logic
-    ngx_str_t key;
-    key.data = (u_char *)&addr;
-    key.len = sizeof(addr); // 4
+    key = msg_pack->Entities[i].Key;
 
-    uint32_t hash = ngx_crc32_short(key.data, key.len);
+    hash = ngx_crc32_short(key.data, key.len);
 
-    ngx_rbtree_node_t *node = ctx->sh->rbtree.root;
-    ngx_rbtree_node_t *sentinel = ctx->sh->rbtree.sentinel;
-    ngx_http_limit_req_node_t *lr = NULL;
-    int found = 0;
+    node = ctx->sh->rbtree.root;
+    sentinel = ctx->sh->rbtree.sentinel;
+
+    found = 0;
     while (node != sentinel) {
       if (hash < node->key) {
         node = node->left;
@@ -303,67 +284,60 @@ static ngx_int_t ngx_http_limit_req_write_handler(ngx_http_request_t *r) {
         node = node->right;
         continue;
       }
+
+      /* hash == node->key */
+
       lr = (ngx_http_limit_req_node_t *)&node->color;
-      if (lr->len == key.len && ngx_memcmp(lr->data, key.data, key.len) == 0) {
-        lr->excess = msg_pack->Entities[i].Excess;
+
+      rc = ngx_memn2cmp(key.data, lr->data, key.len, lr->len);
+
+      if (rc == 0) {
         found = 1;
         break;
       }
-      node = (ngx_memn2cmp(key.data, lr->data, key.len, lr->len) < 0)
-                 ? node->left
-                 : node->right;
+
+      node = (rc < 0) ? node->left : node->right;
     }
-    if (!found) {
-      size_t size = offsetof(ngx_rbtree_node_t, color) +
-                    offsetof(ngx_http_limit_req_node_t, data) + key.len;
+
+    if (found) {
+      ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
+                    "ngx_http_limit_req_rw_module: existing node found %ul",
+                    lr->excess);
+      lr->last = msg_pack->Entities[i].Last;
+      lr->excess = msg_pack->Entities[i].Excess;
+      ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
+                    "ngx_http_limit_req_rw_module: existing node updated %ul",
+                    lr->excess);
+    } else {
+      size = offsetof(ngx_rbtree_node_t, color) +
+             offsetof(ngx_http_limit_req_node_t, data) + key.len;
       node = ngx_slab_alloc_locked(ctx->shpool, size);
       if (node == NULL) {
         ngx_shmtx_unlock(&ctx->shpool->mutex);
         ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
                       "failed to allocate memory for rate limit node");
-        r->headers_out.status = NGX_HTTP_INTERNAL_SERVER_ERROR;
+        return NGX_HTTP_INTERNAL_SERVER_ERROR;
       }
       node->key = hash;
+
       lr = (ngx_http_limit_req_node_t *)&node->color;
 
       lr->len = (u_short)key.len;
-      lr->excess =
-          msg_pack->Entities[i]
-              .Excess; // TODO: replace with the value received from msgPack
+      lr->excess = msg_pack->Entities[i].Excess;
+      lr->last = msg_pack->Entities[i].Last;
       lr->count = 0;
+
       ngx_memcpy(lr->data, key.data, key.len);
 
       ngx_rbtree_insert(&ctx->sh->rbtree, node);
+
       ngx_queue_insert_head(&ctx->sh->queue, &lr->queue);
-      ngx_log_error(
-          NGX_LOG_DEBUG, r->connection->log, 0,
-          "ngx_http_limit_req_rw_module: new node created, excess set to 777");
+
+      ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
+                    "ngx_http_limit_req_rw_module: new node excess set to %ul",
+                    lr->excess);
     }
     ngx_shmtx_unlock(&ctx->shpool->mutex);
-
-    ngx_str_t response = ngx_string("OK\n");
-
-    r->headers_out.status = NGX_HTTP_OK;
-    r->headers_out.content_length_n = response.len;
-    ngx_str_set(&r->headers_out.content_type, "text/plain");
-
-    rc = ngx_http_send_header(r);
-    if (rc == NGX_ERROR || rc > NGX_OK || r->header_only) {
-      r->headers_out.status = NGX_HTTP_INTERNAL_SERVER_ERROR;
-    }
-    ngx_buf_t *b = ngx_create_temp_buf(r->pool, response.len);
-    if (b == NULL) {
-      r->headers_out.status = NGX_HTTP_INTERNAL_SERVER_ERROR;
-    }
-    ngx_memcpy(b->pos, response.data, response.len);
-    b->last = b->pos + response.len;
-    b->last_buf = 1;
-
-    ngx_chain_t out;
-    out.buf = b;
-    out.next = NULL;
-
-    ngx_http_output_filter(r, &out);
   }
   return NGX_OK;
 }
