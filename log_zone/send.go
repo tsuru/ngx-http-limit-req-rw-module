@@ -19,8 +19,10 @@ func send(zone string) {
 			Now:          time.Now().Unix(),
 			NowMonotonic: time.Now().UnixNano() / int64(time.Millisecond),
 		}, []RateLimitEntry{
-			{Key("127.0.0.0"), 7, 99},
-			{Key("127.6.4.00"), 2, 98},
+			{Key([]byte{127, 0, 0, 0}), 7, 99},
+			{Key([]byte{127, 6, 4, 00}), 2, 98},
+			{Key([]byte{127, 0, 0, 99}), 30, 999},
+			{Key([]byte{10, 0, 0, 1}), 444, 21},
 		})
 	if err != nil {
 		logrus.Fatalf("Error sending request: %v", err)
