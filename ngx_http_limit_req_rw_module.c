@@ -232,7 +232,7 @@ static ngx_int_t ngx_http_limit_req_write_handler(ngx_http_request_t *r) {
   size_t size;
   uint32_t hash;
   ngx_rbtree_node_t *node, *sentinel;
-  ngx_http_limit_req_node_t *lr;
+  ngx_http_limit_req_node_t *lr = NULL;
 
   if (r != r->main) {
     return NGX_DECLINED;
