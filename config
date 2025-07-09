@@ -24,6 +24,7 @@ fi
 
 # Add flags
 CFLAGS="$CFLAGS $(pkg-config --cflags "$MSGPACK_PKG_NAME")"
+LDFLAGS="$LDFLAGS $(pkg-config --libs "$MSGPACK_PKG_NAME")"
 CORE_LIBS="$CORE_LIBS $(pkg-config --libs "$MSGPACK_PKG_NAME")"
 
 . auto/module
