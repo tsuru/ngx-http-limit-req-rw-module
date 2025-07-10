@@ -286,8 +286,10 @@ static ngx_int_t ngx_http_limit_req_write_handler(ngx_http_request_t *r) {
       ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
                     "ngx_http_limit_req_rw_module: existing node found %ul",
                     lr->excess);
-      lr->last = msg_pack->Entities[i].Last;
-      lr->excess = msg_pack->Entities[i].Excess;
+      if (lr->last < msg_pack->Entities[i].Last) {
+        lr->last = msg_pack->Entities[i].Last;
+        lr->excess = msg_pack->Entities[i].Excess;
+      }
       ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
                     "ngx_http_limit_req_rw_module: existing node updated %ul",
                     lr->excess);
