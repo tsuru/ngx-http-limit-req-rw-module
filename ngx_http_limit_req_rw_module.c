@@ -372,13 +372,16 @@ static ngx_int_t ngx_decode_msg_pack(ngx_http_request_t *r,
 static void ngx_http_limit_req_write_post_handler(ngx_http_request_t *r) {
   ngx_int_t rc;
 
+  // Call the write handler to process the POST request body and update the zone
   rc = ngx_http_limit_req_write_handler(r);
 
+  // If the write handler failed, finalize the request with the error code
   if (rc != NGX_OK) {
     ngx_http_finalize_request(r, rc);
     return;
   }
 
+  // Prepare a simple "OK\n" response
   ngx_str_t response = ngx_string("OK\n");
   r->headers_out.status = NGX_HTTP_OK;
   r->headers_out.content_length_n = response.len;
@@ -388,13 +391,16 @@ static void ngx_http_limit_req_write_post_handler(ngx_http_request_t *r) {
     return;
   }
 
+  // Allocate a buffer for the response body and copy the response text
   ngx_buf_t *b = ngx_create_temp_buf(r->pool, response.len);
   ngx_memcpy(b->pos, response.data, response.len);
   b->last = b->pos + response.len;
   b->last_buf = 1;
 
+  // Send the response body and finalize the request
   ngx_chain_t out = {.buf = b, .next = NULL};
   ngx_http_output_filter(r, &out);
+  ngx_http_finalize_request(r, NGX_OK);
 }
 
 static ngx_int_t ngx_http_limit_req_write_handler(ngx_http_request_t *r) {
