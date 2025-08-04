@@ -198,6 +198,7 @@ static ngx_int_t ngx_decode_msg_pack(ngx_http_request_t *r,
   size_t size, deserialized_size;
   msgpack_zone mempool;
   msgpack_object deserialized;
+  uint32_t i;
 
   // Ensure request body is present
   if (r->request_body == NULL || r->request_body->bufs == NULL) {
@@ -244,6 +245,12 @@ static ngx_int_t ngx_decode_msg_pack(ngx_http_request_t *r,
     msgpack_zone_destroy(&mempool);
     ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
                   "msgpack array must have at least one element (header)");
+    return NGX_HTTP_INTERNAL_SERVER_ERROR;
+  }
+  if (deserialized_size > MAX_NUMBER_OF_RATE_LIMIT_ELEMENTS + 1) {
+    msgpack_zone_destroy(&mempool);
+    ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                  "msgpack array too large: %d", (int)deserialized_size);
     return NGX_HTTP_INTERNAL_SERVER_ERROR;
   }
   msgpack_object *items = deserialized.via.array.ptr;
@@ -296,21 +303,23 @@ static ngx_int_t ngx_decode_msg_pack(ngx_http_request_t *r,
 
   // Allocate array for entities (deserialized_size - 1)
   if (deserialized_size > 1) {
-    entities *arr =
-        ngx_pnalloc(r->pool, (deserialized_size - 1) * sizeof(entities));
+    uint32_t entities_count = deserialized_size - 1;
+    entities *arr = ngx_pnalloc(r->pool, entities_count * sizeof(entities));
     if (arr == NULL) {
       msgpack_zone_destroy(&mempool);
       ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
                     "failed to allocate memory for entities array");
       return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
-    ngx_zone_data->EntitiesSize = deserialized_size - 1;
+    ngx_zone_data->EntitiesSize = entities_count;
     ngx_zone_data->Entities = arr;
 
     // Parse each entity from the array (skipping header at index 0)
-    for (uint32_t i = 1; i < deserialized_size; i++) {
+    for (i = 1; i < deserialized_size; i++) {
       if (items[i].type != MSGPACK_OBJECT_ARRAY ||
           items[i].via.array.size != 3) {
+        ngx_zone_data->Entities = NULL;
+        ngx_zone_data->EntitiesSize = 0;
         msgpack_zone_destroy(&mempool);
         ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
                       "invalid number of items in array at index %d", i);
@@ -325,6 +334,8 @@ static ngx_int_t ngx_decode_msg_pack(ngx_http_request_t *r,
       if (iItemKey.type != MSGPACK_OBJECT_STR ||
           iItemLast.type != MSGPACK_OBJECT_POSITIVE_INTEGER ||
           iItemExcess.type != MSGPACK_OBJECT_POSITIVE_INTEGER) {
+        ngx_zone_data->Entities = NULL;
+        ngx_zone_data->EntitiesSize = 0;
         msgpack_zone_destroy(&mempool);
         ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
                       "invalid entity types in msgpack at index %d", i);
@@ -334,6 +345,8 @@ static ngx_int_t ngx_decode_msg_pack(ngx_http_request_t *r,
       // Allocate and copy key data for entity
       u_char *entityKeyData = ngx_palloc(r->pool, iItemKey.via.str.size);
       if (entityKeyData == NULL) {
+        ngx_zone_data->Entities = NULL;
+        ngx_zone_data->EntitiesSize = 0;
         msgpack_zone_destroy(&mempool);
         ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
                       "failed to allocate memory for key");
