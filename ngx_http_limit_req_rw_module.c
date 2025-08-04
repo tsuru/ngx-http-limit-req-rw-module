@@ -199,15 +199,18 @@ static ngx_int_t ngx_decode_msg_pack(ngx_http_request_t *r,
   msgpack_zone mempool;
   msgpack_object deserialized;
 
+  // Ensure request body is present
   if (r->request_body == NULL || r->request_body->bufs == NULL) {
     ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "no request body found");
     return NGX_HTTP_INTERNAL_SERVER_ERROR;
   }
 
+  // Calculate total length of request body
   for (cl = r->request_body->bufs; cl; cl = cl->next) {
     len += cl->buf->last - cl->buf->pos;
   }
 
+  // Allocate buffer for request body data
   data = ngx_pnalloc(r->pool, len);
   if (data == NULL) {
     ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
@@ -215,6 +218,7 @@ static ngx_int_t ngx_decode_msg_pack(ngx_http_request_t *r,
     return NGX_HTTP_INTERNAL_SERVER_ERROR;
   }
 
+  // Copy request body data into buffer
   p = data;
   for (cl = r->request_body->bufs; cl; cl = cl->next) {
     size = cl->buf->last - cl->buf->pos;
@@ -222,8 +226,10 @@ static ngx_int_t ngx_decode_msg_pack(ngx_http_request_t *r,
     p += size;
   }
 
+  // Initialize msgpack memory pool
   msgpack_zone_init(&mempool, 2048);
 
+  // Unpack MessagePack data
   msgpack_unpack((char *)data, len, NULL, &mempool, &deserialized);
   ngx_log_error(
       NGX_LOG_DEBUG, r->connection->log, 0,
@@ -234,62 +240,118 @@ static ngx_int_t ngx_decode_msg_pack(ngx_http_request_t *r,
     return NGX_HTTP_INTERNAL_SERVER_ERROR;
   }
   deserialized_size = deserialized.via.array.size;
+  if (deserialized_size < 1) {
+    msgpack_zone_destroy(&mempool);
+    ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                  "msgpack array must have at least one element (header)");
+    return NGX_HTTP_INTERNAL_SERVER_ERROR;
+  }
   msgpack_object *items = deserialized.via.array.ptr;
 
+  // Check header element is an array with at least 3 elements
+  if (items[0].type != MSGPACK_OBJECT_ARRAY || items[0].via.array.size < 3) {
+    msgpack_zone_destroy(&mempool);
+    ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                  "header element must be array of at least 3 elements");
+    return NGX_HTTP_INTERNAL_SERVER_ERROR;
+  }
+
+  // Allocate and populate header structure
   header *hdr = ngx_pnalloc(r->pool, sizeof(header));
   if (hdr == NULL) {
+    msgpack_zone_destroy(&mempool);
     ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
                   "failed to allocate memory for header");
     return NGX_HTTP_INTERNAL_SERVER_ERROR;
   }
 
-  if (items->via.array.size >= 1) {
-    msgpack_object hdrKey = items[0].via.array.ptr[0];
-    msgpack_object hdrNow = items[0].via.array.ptr[1];
-    msgpack_object hdrNowMonotonic = items[0].via.array.ptr[2];
-    hdr->Key.len = hdrKey.via.str.size;
-    u_char *keyData = ngx_palloc(r->pool, hdrKey.via.str.size);
-    if (keyData == NULL) {
-      ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
-                    "failed to allocate memory for key");
-      return NGX_HTTP_INTERNAL_SERVER_ERROR;
-    }
-    ngx_memcpy(keyData, hdrKey.via.str.ptr, hdrKey.via.str.size);
-    hdr->Key.data = keyData;
-    hdr->Now = hdrNow.via.u64;
-    hdr->NowMonotonic = hdrNowMonotonic.via.u64;
+  // Parse header from first array element
+  msgpack_object hdrKey = items[0].via.array.ptr[0];
+  msgpack_object hdrNow = items[0].via.array.ptr[1];
+  msgpack_object hdrNowMonotonic = items[0].via.array.ptr[2];
+
+  // Type checks for header fields
+  if (hdrKey.type != MSGPACK_OBJECT_STR ||
+      hdrNow.type != MSGPACK_OBJECT_POSITIVE_INTEGER ||
+      hdrNowMonotonic.type != MSGPACK_OBJECT_POSITIVE_INTEGER) {
+    msgpack_zone_destroy(&mempool);
+    ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                  "invalid header types in msgpack");
+    return NGX_HTTP_INTERNAL_SERVER_ERROR;
   }
+
+  hdr->Key.len = hdrKey.via.str.size;
+  u_char *keyData = ngx_palloc(r->pool, hdrKey.via.str.size);
+  if (keyData == NULL) {
+    msgpack_zone_destroy(&mempool);
+    ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                  "failed to allocate memory for key");
+    return NGX_HTTP_INTERNAL_SERVER_ERROR;
+  }
+  ngx_memcpy(keyData, hdrKey.via.str.ptr, hdrKey.via.str.size);
+  hdr->Key.data = keyData;
+  hdr->Now = hdrNow.via.u64;
+  hdr->NowMonotonic = hdrNowMonotonic.via.u64;
   ngx_zone_data->Header = hdr;
 
-  entities *arr = ngx_pnalloc(r->pool, deserialized_size * sizeof(entities));
-  ngx_zone_data->EntitiesSize = deserialized_size - 1;
-  ngx_zone_data->Entities = arr;
-
-  for (uint32_t i = 1; i < deserialized_size; i++) {
-    if (items[i].via.array.size != 3) {
-      ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
-                    "invalid number of items in array at index %d", i);
+  // Allocate array for entities (deserialized_size - 1)
+  if (deserialized_size > 1) {
+    entities *arr =
+        ngx_pnalloc(r->pool, (deserialized_size - 1) * sizeof(entities));
+    if (arr == NULL) {
       msgpack_zone_destroy(&mempool);
-      return NGX_HTTP_INTERNAL_SERVER_ERROR;
-    }
-
-    msgpack_object iItemKey = items[i].via.array.ptr[0];
-    msgpack_object iItemLast = items[i].via.array.ptr[1];
-    msgpack_object iItemExcess = items[i].via.array.ptr[2];
-
-    u_char *keyData = ngx_palloc(r->pool, iItemKey.via.str.size);
-    if (keyData == NULL) {
       ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
-                    "failed to allocate memory for key");
+                    "failed to allocate memory for entities array");
       return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
-    ngx_memcpy(keyData, iItemKey.via.str.ptr, iItemKey.via.str.size);
+    ngx_zone_data->EntitiesSize = deserialized_size - 1;
+    ngx_zone_data->Entities = arr;
 
-    arr[i - 1].Key.len = iItemKey.via.str.size;
-    arr[i - 1].Key.data = keyData;
-    arr[i - 1].Last = iItemLast.via.u64;
-    arr[i - 1].Excess = iItemExcess.via.u64;
+    // Parse each entity from the array (skipping header at index 0)
+    for (uint32_t i = 1; i < deserialized_size; i++) {
+      if (items[i].type != MSGPACK_OBJECT_ARRAY ||
+          items[i].via.array.size != 3) {
+        msgpack_zone_destroy(&mempool);
+        ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                      "invalid number of items in array at index %d", i);
+        return NGX_HTTP_INTERNAL_SERVER_ERROR;
+      }
+
+      msgpack_object iItemKey = items[i].via.array.ptr[0];
+      msgpack_object iItemLast = items[i].via.array.ptr[1];
+      msgpack_object iItemExcess = items[i].via.array.ptr[2];
+
+      // Type checks for entity fields
+      if (iItemKey.type != MSGPACK_OBJECT_STR ||
+          iItemLast.type != MSGPACK_OBJECT_POSITIVE_INTEGER ||
+          iItemExcess.type != MSGPACK_OBJECT_POSITIVE_INTEGER) {
+        msgpack_zone_destroy(&mempool);
+        ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                      "invalid entity types in msgpack at index %d", i);
+        return NGX_HTTP_INTERNAL_SERVER_ERROR;
+      }
+
+      // Allocate and copy key data for entity
+      u_char *entityKeyData = ngx_palloc(r->pool, iItemKey.via.str.size);
+      if (entityKeyData == NULL) {
+        msgpack_zone_destroy(&mempool);
+        ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                      "failed to allocate memory for key");
+        return NGX_HTTP_INTERNAL_SERVER_ERROR;
+      }
+      ngx_memcpy(entityKeyData, iItemKey.via.str.ptr, iItemKey.via.str.size);
+
+      arr[i - 1].Key.len = iItemKey.via.str.size;
+      arr[i - 1].Key.data = entityKeyData;
+      arr[i - 1].Last = iItemLast.via.u64;
+      arr[i - 1].Excess = iItemExcess.via.u64;
+    }
+  } else {
+    ngx_zone_data->EntitiesSize = 0;
+    ngx_zone_data->Entities = NULL;
   }
+
+  // Clean up msgpack memory pool
   msgpack_zone_destroy(&mempool);
   return NGX_OK;
 }
