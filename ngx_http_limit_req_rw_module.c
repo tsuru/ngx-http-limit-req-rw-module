@@ -194,7 +194,11 @@ static void ngx_http_limit_req_write_post_handler(ngx_http_request_t *r) {
   ngx_str_t response = ngx_string("OK\n");
   r->headers_out.status = NGX_HTTP_OK;
   r->headers_out.content_length_n = response.len;
-  ngx_http_send_header(r);
+  rc = ngx_http_send_header(r);
+  if (rc != NGX_OK) {
+    ngx_http_finalize_request(r, rc);
+    return;
+  }
 
   ngx_buf_t *b = ngx_create_temp_buf(r->pool, response.len);
   ngx_memcpy(b->pos, response.data, response.len);
