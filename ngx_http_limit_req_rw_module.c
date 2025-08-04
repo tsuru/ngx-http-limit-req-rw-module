@@ -415,6 +415,7 @@ static ngx_int_t ngx_http_limit_req_write_handler(ngx_http_request_t *r) {
   ngx_rbtree_node_t *node, *sentinel;
   ngx_http_limit_req_node_t *lr = NULL;
 
+  // Only process main requests, not subrequests
   if (r != r->main) {
     return NGX_DECLINED;
   }
@@ -432,26 +433,56 @@ static ngx_int_t ngx_http_limit_req_write_handler(ngx_http_request_t *r) {
     return rc;
   }
 
-  if (strip_zone_name_from_uri(&r->uri, &zone_name) != NGX_OK) {
+  // Validate decoded header
+  if (msg_pack->Header == NULL || msg_pack->Header->Key.len == 0 ||
+      msg_pack->Header->Key.data == NULL) {
+    ngx_log_error(
+        NGX_LOG_ERR, r->connection->log, 0,
+        "ngx_http_limit_req_rw_module: invalid or missing header in msgpack");
+    return NGX_HTTP_BAD_REQUEST;
+  }
+
+  // Validate entities array size
+  if (msg_pack->EntitiesSize > MAX_NUMBER_OF_RATE_LIMIT_ELEMENTS) {
+    ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                  "ngx_http_limit_req_rw_module: too many entities: %ud",
+                  msg_pack->EntitiesSize);
+    return NGX_HTTP_BAD_REQUEST;
+  }
+
+  if (strip_zone_name_from_uri(&r->uri, &zone_name) != NGX_OK ||
+      zone_name.len == 0 || zone_name.data == NULL) {
     ngx_log_error(
         NGX_LOG_ERR, r->connection->log, 0,
         "ngx_http_limit_req_rw_module: failed to extract zone name from URI");
     return NGX_HTTP_BAD_REQUEST;
   }
+
   shm_zone = find_rate_limit_shm_zone_by_name(r, zone_name);
   if (shm_zone == NULL) {
     ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
                   "ngx_http_limit_req_rw_module: rate limit zone %*s not found",
-                  zone_name);
+                  zone_name.len, zone_name.data);
     return NGX_HTTP_NOT_FOUND;
   }
 
   ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
                 "ngx_http_limit_req_rw_module: Header Key: %*s",
-                msg_pack->Header->Key);
+                msg_pack->Header->Key.len, msg_pack->Header->Key.data);
+
+  ctx = shm_zone->data;
+  ngx_shmtx_lock(&ctx->shpool->mutex);
+
+  // Iterate over each entity in the decoded data
   for (uint32_t i = 0; i < msg_pack->EntitiesSize; i++) {
-    ctx = shm_zone->data;
-    ngx_shmtx_lock(&ctx->shpool->mutex);
+    // Validate entity key
+    if (msg_pack->Entities[i].Key.len == 0 ||
+        msg_pack->Entities[i].Key.data == NULL) {
+      ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                    "ngx_http_limit_req_rw_module: entity %ud has invalid key",
+                    i);
+      continue;
+    }
 
     key = msg_pack->Entities[i].Key;
 
@@ -461,6 +492,7 @@ static ngx_int_t ngx_http_limit_req_write_handler(ngx_http_request_t *r) {
     sentinel = ctx->sh->rbtree.sentinel;
 
     found = 0;
+    // Search for the node in the rbtree
     while (node != sentinel) {
       if (hash < node->key) {
         node = node->left;
@@ -486,6 +518,7 @@ static ngx_int_t ngx_http_limit_req_write_handler(ngx_http_request_t *r) {
     }
 
     if (found) {
+      // Update existing node with new values
       ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
                     "ngx_http_limit_req_rw_module: existing node found %ul",
                     lr->excess);
@@ -495,6 +528,7 @@ static ngx_int_t ngx_http_limit_req_write_handler(ngx_http_request_t *r) {
                     "ngx_http_limit_req_rw_module: existing node updated %ul",
                     lr->excess);
     } else {
+      // Create a new node if not found
       size = offsetof(ngx_rbtree_node_t, color) +
              offsetof(ngx_http_limit_req_node_t, data) + key.len;
       node = ngx_slab_alloc_locked(ctx->shpool, size);
@@ -523,8 +557,9 @@ static ngx_int_t ngx_http_limit_req_write_handler(ngx_http_request_t *r) {
                     "ngx_http_limit_req_rw_module: new node excess set to %ul",
                     lr->excess);
     }
-    ngx_shmtx_unlock(&ctx->shpool->mutex);
   }
+
+  ngx_shmtx_unlock(&ctx->shpool->mutex);
   return NGX_OK;
 }
 
