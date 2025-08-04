@@ -1,6 +1,18 @@
-/*
-TODO: copyright
-*/
+// Copyright 2025 tsuru authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+/**
+ * @file ngx_http_limit_req_rw_module.c
+ * @brief Implementation of the ngx_http_limit_req_rw_module for NGINX.
+ *
+ * This module provides read/write access to the shared memory zones used by
+ * the ngx_http_limit_req_module for rate limiting. It allows external tools
+ * to inspect and modify the state of rate limiting zones via HTTP requests.
+ *
+ * The module supports GET requests for reading the state of all or specific
+ * rate limit zones, and POST requests for updating the state of a zone.
+ */
 
 #include <nginx.h>
 #include <ngx_conf_file.h>
@@ -16,21 +28,108 @@ TODO: copyright
 
 #include "ngx_http_limit_req_rw_module.h"
 
+/**
+ * @brief Handler for HTTP requests to read or write rate limit zones.
+ *
+ * This function determines the type of request (GET or POST) and calls the
+ * appropriate handler for reading or writing the rate limit zone state.
+ *
+ * @param r The HTTP request.
+ * @return NGX_OK if the request was handled successfully, or an appropriate
+ *         NGINX HTTP error code.
+ */
+static ngx_int_t ngx_http_limit_req_handler(ngx_http_request_t *r);
+
+/**
+ * @brief Deserialize a MessagePack-encoded request body into ngx_zone_data_t.
+ *
+ * @param r         The HTTP request.
+ * @param msg_pack  Pointer to ngx_zone_data_t to populate.
+ * @return NGX_OK on success, NGX_HTTP_INTERNAL_SERVER_ERROR on failure.
+ */
 static ngx_int_t ngx_decode_msg_pack(ngx_http_request_t *r,
                                      ngx_zone_data_t *msg_pack);
 
+/**
+ * @brief Handler for HTTP GET requests to read rate limit zone state.
+ *
+ * @param r The HTTP request.
+ * @return NGX_OK or an appropriate NGINX HTTP error code.
+ */
 static ngx_int_t ngx_http_limit_req_read_handler(ngx_http_request_t *r);
+
+/**
+ * @brief Post-handler for HTTP POST requests to write rate limit zone state.
+ *
+ * @param r The HTTP request.
+ */
 static void ngx_http_limit_req_write_post_handler(ngx_http_request_t *r);
+
+/**
+ * @brief Handler for writing/updating rate limit zone state.
+ *
+ * @param r The HTTP request.
+ * @return NGX_OK or an appropriate NGINX HTTP error code.
+ */
 static ngx_int_t ngx_http_limit_req_write_handler(ngx_http_request_t *r);
 
+/**
+ * @brief Configuration handler for the limit_req_rw_handler directive.
+ *
+ * @param cf   NGINX configuration context.
+ * @param cmd  The command.
+ * @param conf Module configuration.
+ * @return NGX_CONF_OK or an error string.
+ */
 static char *ngx_http_limit_req_rw_handler(ngx_conf_t *cf, ngx_command_t *cmd,
                                            void *conf);
+
+/**
+ * @brief Extract the zone name from the request URI.
+ *
+ * @param uri       The request URI.
+ * @param zone_name Output parameter for the extracted zone name.
+ */
 static void strip_zone_name_from_uri(ngx_str_t *uri, ngx_str_t *zone_name);
+
+/**
+ * @brief Serialize all rate limit zones into a buffer using MessagePack.
+ *
+ * @param r The HTTP request.
+ * @param b The buffer to write to.
+ * @return NGX_OK or an appropriate NGINX HTTP error code.
+ */
 static ngx_int_t dump_rate_limit_zones(ngx_http_request_t *r, ngx_buf_t *b);
+
+/**
+ * @brief Find a rate limit shared memory zone by its name.
+ *
+ * @param r         The HTTP request.
+ * @param zone_name The name of the zone to find.
+ * @return Pointer to ngx_shm_zone_t if found, NULL otherwise.
+ */
 static ngx_shm_zone_t *find_rate_limit_shm_zone_by_name(ngx_http_request_t *r,
                                                         ngx_str_t zone_name);
+
+/**
+ * @brief Serialize the state of a specific rate limit zone into a buffer.
+ *
+ * @param pool                Memory pool for allocations.
+ * @param shm_zone            The shared memory zone.
+ * @param buf                 The buffer to write to.
+ * @param last_greater_equal  Only include entries with 'last' >= this value.
+ * @return NGX_OK or an appropriate NGINX HTTP error code.
+ */
 static ngx_int_t dump_req_limits(ngx_pool_t *pool, ngx_shm_zone_t *shm_zone,
                                  ngx_buf_t *buf, ngx_uint_t last_greater_equal);
+
+/**
+ * @brief Module directives for ngx_http_limit_req_rw_module.
+ *
+ * This array defines the configuration directives accepted by the module.
+ * Currently, it includes the "limit_req_rw_handler" directive, which sets up
+ * the HTTP handler for read/write access to rate limit zones.
+ */
 static ngx_command_t ngx_http_limit_req_rw_commands[] = {
     {ngx_string("limit_req_rw_handler"),
      NGX_HTTP_MAIN_CONF | NGX_HTTP_SRV_CONF | NGX_HTTP_LOC_CONF |
@@ -38,6 +137,13 @@ static ngx_command_t ngx_http_limit_req_rw_commands[] = {
      ngx_http_limit_req_rw_handler, 0, 0, NULL},
     ngx_null_command};
 
+/**
+ * @brief Module context for ngx_http_limit_req_rw_module.
+ *
+ * This structure provides callbacks for module initialization and configuration
+ * phases. All callbacks are set to NULL as this module does not require custom
+ * configuration or initialization steps.
+ */
 static ngx_http_module_t ngx_http_limit_req_rw_module_ctx = {
     NULL, /* preconfiguration */
     NULL, /* postconfiguration */
@@ -52,6 +158,13 @@ static ngx_http_module_t ngx_http_limit_req_rw_module_ctx = {
     NULL  /* merge location configuration */
 };
 
+/**
+ * @brief Module definition for ngx_http_limit_req_rw_module.
+ *
+ * This structure registers the module with NGINX, providing pointers to the
+ * module context, directives, and lifecycle hooks. Most hooks are set to NULL
+ * as this module does not require custom initialization or cleanup.
+ */
 ngx_module_t ngx_http_limit_req_rw_module = {NGX_MODULE_V1,
                                              &ngx_http_limit_req_rw_module_ctx,
                                              ngx_http_limit_req_rw_commands,
