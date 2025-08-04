@@ -90,7 +90,7 @@ static char *ngx_http_limit_req_rw_handler(ngx_conf_t *cf, ngx_command_t *cmd,
  * @param uri       The request URI.
  * @param zone_name Output parameter for the extracted zone name.
  */
-static void strip_zone_name_from_uri(ngx_str_t *uri, ngx_str_t *zone_name);
+static ngx_int_t strip_zone_name_from_uri(ngx_str_t *uri, ngx_str_t *zone_name);
 
 /**
  * @brief Serialize all rate limit zones into a buffer using MessagePack.
@@ -432,7 +432,12 @@ static ngx_int_t ngx_http_limit_req_write_handler(ngx_http_request_t *r) {
     return rc;
   }
 
-  strip_zone_name_from_uri(&r->uri, &zone_name);
+  if (strip_zone_name_from_uri(&r->uri, &zone_name) != NGX_OK) {
+    ngx_log_error(
+        NGX_LOG_ERR, r->connection->log, 0,
+        "ngx_http_limit_req_rw_module: failed to extract zone name from URI");
+    return NGX_HTTP_BAD_REQUEST;
+  }
   shm_zone = find_rate_limit_shm_zone_by_name(r, zone_name);
   if (shm_zone == NULL) {
     ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
@@ -555,7 +560,12 @@ static ngx_int_t ngx_http_limit_req_read_handler(ngx_http_request_t *r) {
                   "ngx_http_limit_req_rw_module: dumping rate limit zones");
     rc = dump_rate_limit_zones(r, b);
   } else {
-    strip_zone_name_from_uri(&r->uri, &zone_name);
+    if (strip_zone_name_from_uri(&r->uri, &zone_name) != NGX_OK) {
+      ngx_log_error(
+          NGX_LOG_ERR, r->connection->log, 0,
+          "ngx_http_limit_req_rw_module: failed to extract zone name from URI");
+      return NGX_HTTP_BAD_REQUEST;
+    }
     ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0, "zone name: %*s",
                   zone_name);
     last_greater_equal_arg.len = 0;
@@ -614,16 +624,32 @@ static char *ngx_http_limit_req_rw_handler(ngx_conf_t *cf, ngx_command_t *cmd,
   return NGX_CONF_OK;
 }
 
-static void strip_zone_name_from_uri(ngx_str_t *uri, ngx_str_t *zone_name) {
-  zone_name->data = (u_char *)ngx_strlchr(uri->data, uri->data + uri->len, '/');
-  zone_name->len = 0;
+static ngx_int_t strip_zone_name_from_uri(ngx_str_t *uri,
+                                          ngx_str_t *zone_name) {
+  u_char *first_slash, *second_slash;
 
-  if (zone_name->data) {
-    zone_name->data =
-        (u_char *)(ngx_strlchr(zone_name->data + 1, uri->data + uri->len, '/') +
-                   1);
-    zone_name->len = uri->len - (zone_name->data - uri->data);
+  // Find the first slash ('/') character in the URI
+  first_slash = (u_char *)ngx_strlchr(uri->data, uri->data + uri->len, '/');
+  if (first_slash == NULL) {
+    zone_name->data = NULL;
+    zone_name->len = 0;
+    return NGX_ERROR;
   }
+
+  // Find the second slash ('/') character in the URI
+  second_slash =
+      (u_char *)ngx_strlchr(first_slash + 1, uri->data + uri->len, '/');
+  if (second_slash == NULL) {
+    zone_name->data = NULL;
+    zone_name->len = 0;
+    return NGX_ERROR;
+  }
+
+  // Set zone_name to the string after the second slash
+  zone_name->data = second_slash + 1;
+  zone_name->len = uri->len - (zone_name->data - uri->data);
+
+  return NGX_OK;
 }
 
 static inline int msgpack_ngx_buf_write(void *data, const char *buf,
