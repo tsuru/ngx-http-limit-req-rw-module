@@ -331,7 +331,7 @@ static ngx_int_t ngx_decode_msg_pack(ngx_http_request_t *r,
       msgpack_object iItemExcess = items[i].via.array.ptr[2];
 
       // Type checks for entity fields
-      if (iItemKey.type != MSGPACK_OBJECT_STR ||
+      if (iItemKey.type != MSGPACK_OBJECT_BIN ||
           iItemLast.type != MSGPACK_OBJECT_POSITIVE_INTEGER ||
           iItemExcess.type != MSGPACK_OBJECT_POSITIVE_INTEGER) {
         ngx_zone_data->Entities = NULL;
@@ -343,7 +343,7 @@ static ngx_int_t ngx_decode_msg_pack(ngx_http_request_t *r,
       }
 
       // Allocate and copy key data for entity
-      u_char *entityKeyData = ngx_palloc(r->pool, iItemKey.via.str.size);
+      u_char *entityKeyData = ngx_palloc(r->pool, iItemKey.via.bin.size);
       if (entityKeyData == NULL) {
         ngx_zone_data->Entities = NULL;
         ngx_zone_data->EntitiesSize = 0;
@@ -352,9 +352,9 @@ static ngx_int_t ngx_decode_msg_pack(ngx_http_request_t *r,
                       "failed to allocate memory for key");
         return NGX_HTTP_INTERNAL_SERVER_ERROR;
       }
-      ngx_memcpy(entityKeyData, iItemKey.via.str.ptr, iItemKey.via.str.size);
+      ngx_memcpy(entityKeyData, iItemKey.via.bin.ptr, iItemKey.via.bin.size);
 
-      arr[i - 1].Key.len = iItemKey.via.str.size;
+      arr[i - 1].Key.len = iItemKey.via.bin.size;
       arr[i - 1].Key.data = entityKeyData;
       arr[i - 1].Last = iItemLast.via.u64;
       arr[i - 1].Excess = iItemExcess.via.u64;
@@ -572,8 +572,18 @@ static ngx_int_t ngx_http_limit_req_read_handler(ngx_http_request_t *r) {
   ngx_http_core_loc_conf_t *clcf;
   ngx_shm_zone_t *shm_zone;
 
+  // Get the core location configuration for the request
   clcf = ngx_http_get_module_loc_conf(r, ngx_http_core_module);
-  b = ngx_create_temp_buf(r->pool, 1024 * 1024);
+
+  // Check if location config is present
+  if (clcf == NULL) {
+    ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                  "ngx_http_limit_req_rw_module: clcf is NULL");
+    return NGX_HTTP_INTERNAL_SERVER_ERROR;
+  }
+
+  // Allocate a temporary buffer for the response
+  b = ngx_create_temp_buf(r->pool, NGX_HTTP_LIMIT_REQ_RW_DUMP_BUF_SIZE);
   if (b == NULL) {
     ngx_log_error(
         NGX_LOG_ERR, r->connection->log, 0,
@@ -581,20 +591,20 @@ static ngx_int_t ngx_http_limit_req_read_handler(ngx_http_request_t *r) {
     return NGX_HTTP_INTERNAL_SERVER_ERROR;
   }
 
-  if (clcf == NULL) {
-    ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
-                  "ngx_http_limit_req_rw_module: clcf is NULL");
-    return NGX_HTTP_INTERNAL_SERVER_ERROR;
-  }
   ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
                 "ngx_http_limit_req_rw_module: request URI: %*s", r->uri);
   ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
                 "ngx_http_limit_req_rw_module: clcf->name: %*s", clcf->name);
+
+  // If the URI matches the location exactly, dump all rate limit zone names
+  // Example: If the request URI is "/limit_req_zones" and the location is also
+  // "/limit_req_zones", we dump all zones.
   if (clcf->name.len == r->uri.len) {
     ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
                   "ngx_http_limit_req_rw_module: dumping rate limit zones");
     rc = dump_rate_limit_zones(r, b);
   } else {
+    // Otherwise, extract the zone name from the URI
     if (strip_zone_name_from_uri(&r->uri, &zone_name) != NGX_OK) {
       ngx_log_error(
           NGX_LOG_ERR, r->connection->log, 0,
@@ -603,8 +613,12 @@ static ngx_int_t ngx_http_limit_req_read_handler(ngx_http_request_t *r) {
     }
     ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0, "zone name: %*s",
                   zone_name);
+
+    // Initialize last_greater_equal argument
     last_greater_equal_arg.len = 0;
     last_greater_equal = 0;
+
+    // Parse the optional last_greater_equal query argument
     if (r->args.len) {
       if (ngx_http_arg(r, (u_char *)"last_greater_equal", 18,
                        &last_greater_equal_arg) == NGX_OK) {
@@ -615,37 +629,47 @@ static ngx_int_t ngx_http_limit_req_read_handler(ngx_http_request_t *r) {
         }
       }
     }
+
+    // Find the shared memory zone by name
     shm_zone = find_rate_limit_shm_zone_by_name(r, zone_name);
     if (shm_zone == NULL) {
       ngx_log_error(
           NGX_LOG_ERR, r->connection->log, 0,
           "ngx_http_limit_req_rw_module: rate limit zone %*s not found",
-          zone_name);
+          zone_name.len, zone_name.data);
       return NGX_HTTP_NOT_FOUND;
     }
+
+    // Dump the state of the specific rate limit zone
     rc = dump_req_limits(r->pool, shm_zone, b, last_greater_equal);
   }
 
+  // If dumping failed, return the error code
   if (rc != NGX_OK) {
     return rc;
   }
 
+  // Set the response content type to MessagePack
   ngx_str_set(&content_type, "application/vnd.msgpack");
   r->headers_out.content_type = content_type;
   r->headers_out.content_length_n = b->last - b->pos;
   r->headers_out.status = NGX_HTTP_OK; /* 200 OK */
 
+  // Mark the buffer as the last buffer in the response
   b->last_buf = (r == r->main) ? 1 : 0; /* if subrequest 0 else 1 */
   b->last_in_chain = 1;
 
+  // Prepare the output chain
   out.buf = b;
   out.next = NULL;
 
+  // Send the response headers
   rc = ngx_http_send_header(r);
   if (rc == NGX_ERROR || rc > NGX_OK || r->header_only) {
     return rc;
   }
 
+  // Send the response body
   return ngx_http_output_filter(r, &out);
 }
 
@@ -880,8 +904,8 @@ static ngx_int_t dump_req_limits(ngx_pool_t *pool, ngx_shm_zone_t *shm_zone,
     }
     msgpack_pack_array(&pk, 3);
 
-    msgpack_pack_str(&pk, lr->len);
-    msgpack_pack_str_body(&pk, lr->data, lr->len);
+    msgpack_pack_bin(&pk, lr->len);
+    msgpack_pack_bin_body(&pk, lr->data, lr->len);
     msgpack_pack_uint64(&pk, lr->last);
     msgpack_pack_int(&pk, lr->excess);
 

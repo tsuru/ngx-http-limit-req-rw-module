@@ -29,6 +29,7 @@ process in a single operation.
 #include <ngx_string.h>
 
 #define MAX_NUMBER_OF_RATE_LIMIT_ELEMENTS (30000)
+#define NGX_HTTP_LIMIT_REQ_RW_DUMP_BUF_SIZE (4 * 1024 * 1024)
 
 /**
  * Represents a single rate limit entity.
@@ -37,6 +38,7 @@ process in a single operation.
  * Excess:   The excess count for the rate limit.
  */
 typedef struct {
+  // Although ngx_str_t is a string, it can also hold binary data.
   ngx_str_t Key;
   uint64_t Last;
   uint64_t Excess;
