@@ -724,15 +724,20 @@ static ngx_int_t dump_rate_limit_zones(ngx_http_request_t *r, ngx_buf_t *buf) {
   ngx_uint_t i;
   ngx_shm_zone_t *shm_zone;
   volatile ngx_list_part_t *part;
+  msgpack_packer pk;
 
+  // Check if the global NGINX cycle pointer is available
   if (ngx_cycle == NULL) {
     ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
                   "ngx_http_limit_req_rw_module: ngx_cycle is NULL");
     return NGX_HTTP_INTERNAL_SERVER_ERROR;
   }
 
-  msgpack_packer pk;
+  // Initialize a MessagePack packer to serialize the output into the provided
+  // buffer
   msgpack_packer_init(&pk, buf, msgpack_ngx_buf_write);
+
+  // Create a dynamic array to hold pointers to the names of all limit_req zones
   zones = ngx_array_create(r->pool, 0, sizeof(ngx_str_t *));
   if (zones == NULL) {
     ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
@@ -740,13 +745,17 @@ static ngx_int_t dump_rate_limit_zones(ngx_http_request_t *r, ngx_buf_t *buf) {
     return NGX_HTTP_INTERNAL_SERVER_ERROR;
   }
 
+  // Get the first part of the shared memory list from the NGINX cycle
   part = &ngx_cycle->shared_memory.part;
   ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
                 "ngx_http_limit_req_rw_module: part->nelts %d", part->nelts);
   shm_zone = part->elts;
 
+  // Iterate over all shared memory zones in all parts of the list
   for (i = 0; /* void */; i++) {
 
+    // If we've reached the end of the current part, move to the next part if it
+    // exists
     if (i >= part->nelts) {
       if (part->next == NULL) {
         ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
@@ -765,12 +774,14 @@ static ngx_int_t dump_rate_limit_zones(ngx_http_request_t *r, ngx_buf_t *buf) {
                     part->nelts);
     }
 
+    // Skip if the shared memory zone pointer is NULL
     if (shm_zone == NULL) {
       ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
                     "ngx_http_limit_req_rw_module: shm_zone is NULL, skipping");
       continue;
     }
 
+    // Only consider shared memory zones that belong to the limit_req module
     ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
                   "ngx_http_limit_req_rw_module: comparing shm_zone tag");
     if (shm_zone[i].tag != &ngx_http_limit_req_module) {
@@ -780,6 +791,7 @@ static ngx_int_t dump_rate_limit_zones(ngx_http_request_t *r, ngx_buf_t *buf) {
       continue;
     }
 
+    // Add the zone name pointer to the zones array
     ngx_log_error(
         NGX_LOG_DEBUG, r->connection->log, 0,
         "ngx_http_limit_req_rw_module: pushing new zone struct to array");
@@ -797,6 +809,7 @@ static ngx_int_t dump_rate_limit_zones(ngx_http_request_t *r, ngx_buf_t *buf) {
                   "ngx_http_limit_req_rw_module: zone name copied");
   }
 
+  // Serialize the array of zone names as a MessagePack array
   ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
                 "ngx_http_limit_req_rw_module: packing array of zones");
   msgpack_pack_array(&pk, zones->nelts);
@@ -818,17 +831,22 @@ static ngx_shm_zone_t *find_rate_limit_shm_zone_by_name(ngx_http_request_t *r,
   ngx_shm_zone_t *shm_zone;
   volatile ngx_list_part_t *part;
 
+  // Check if the global NGINX cycle pointer is available
   if (ngx_cycle == NULL) {
     ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
                   "ngx_http_limit_req_rw_module: ngx_cycle is NULL");
     return NULL;
   }
 
+  // Get the first part of the shared memory list from the NGINX cycle
   part = &ngx_cycle->shared_memory.part;
   shm_zone = part->elts;
 
+  // Iterate over all shared memory zones in all parts of the list
   for (i = 0; /* void */; i++) {
 
+    // If we've reached the end of the current part, move to the next part if it
+    // exists
     if (i >= part->nelts) {
       if (part->next == NULL) {
         break;
@@ -838,21 +856,25 @@ static ngx_shm_zone_t *find_rate_limit_shm_zone_by_name(ngx_http_request_t *r,
       i = 0;
     }
 
+    // Skip if the shared memory zone pointer is NULL
     if (shm_zone == NULL) {
       continue;
     }
 
+    // Only consider shared memory zones that belong to the limit_req module
     if (shm_zone[i].tag != &ngx_http_limit_req_module) {
       continue;
     }
 
+    // Check if the zone name length matches
     if (shm_zone[i].shm.name.len != zone_name.len) {
       continue;
     }
 
+    // Compare the zone name bytes for an exact match
     if (ngx_strncmp(zone_name.data, shm_zone[i].shm.name.data, zone_name.len) ==
         0) {
-      return shm_zone;
+      return &shm_zone[i];
     }
   }
   ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
@@ -869,49 +891,63 @@ static ngx_int_t dump_req_limits(ngx_pool_t *pool, ngx_shm_zone_t *shm_zone,
   ngx_http_limit_req_node_t *lr;
   time_t now, now_monotonic;
   int i;
+  msgpack_packer pk;
 
+  // Get the current monotonic time in milliseconds
   now_monotonic = ngx_current_msec;
-  // retrieving current timestamp in milliseconds
+  // Get the current wall clock time in milliseconds
   now = ngx_cached_time->sec * 1000 + ngx_cached_time->msec;
 
+  // Retrieve the context for the shared memory zone
   ctx = shm_zone->data;
 
-  msgpack_packer pk;
+  // Initialize a MessagePack packer to serialize output into the buffer
   msgpack_packer_init(&pk, buf, msgpack_ngx_buf_write);
 
-  // Including header
+  // Write the header as a MessagePack array:
+  // [zone_name, now, now_monotonic]
   msgpack_pack_array(&pk, 3);
   msgpack_pack_str(&pk, ctx->key.value.len);
   msgpack_pack_str_body(&pk, ctx->key.value.data, ctx->key.value.len);
   msgpack_pack_uint64(&pk, now);
   msgpack_pack_uint64(&pk, now_monotonic);
 
+  // Lock the shared memory pool for safe access
   ngx_shmtx_lock(&ctx->shpool->mutex);
 
+  // If the queue is empty, unlock and return
   if (ngx_queue_empty(&ctx->sh->queue)) {
     ngx_shmtx_unlock(&ctx->shpool->mutex);
     return NGX_OK;
   }
 
+  // Get the head and last pointers of the queue
   head = ngx_queue_head(&ctx->sh->queue);
   last = ngx_queue_last(head);
   q = head;
 
+  // Iterate over the queue, serializing up to MAX_NUMBER_OF_RATE_LIMIT_ELEMENTS
   for (i = 0; q != last && i < MAX_NUMBER_OF_RATE_LIMIT_ELEMENTS; i++) {
     lr = ngx_queue_data(q, ngx_http_limit_req_node_t, queue);
+
+    // If last_greater_equal is set, skip entries with lr->last <
+    // last_greater_equal
     if (last_greater_equal != 0 && lr->last < last_greater_equal) {
       break;
     }
+
+    // Serialize each entry as [key(bin), last(uint64), excess(uint64)]
     msgpack_pack_array(&pk, 3);
 
     msgpack_pack_bin(&pk, lr->len);
     msgpack_pack_bin_body(&pk, lr->data, lr->len);
     msgpack_pack_uint64(&pk, lr->last);
-    msgpack_pack_int(&pk, lr->excess);
+    msgpack_pack_uint64(&pk, lr->excess);
 
     q = q->next;
   }
 
+  // Unlock the shared memory pool
   ngx_shmtx_unlock(&ctx->shpool->mutex);
 
   return NGX_OK;
