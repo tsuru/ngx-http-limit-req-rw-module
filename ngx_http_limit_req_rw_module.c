@@ -714,13 +714,29 @@ static ngx_int_t strip_zone_name_from_uri(ngx_str_t *uri,
 static inline int msgpack_ngx_buf_write(void *data, const char *buf,
                                         size_t len) {
   ngx_buf_t *b = (ngx_buf_t *)data;
+
+  // Validate inputs
+  if (!b || !buf || len == 0) {
+    return -1;
+  }
+
+  // Validate buffer state
+  if (b->last > b->end || b->pos > b->last) {
+    return -1; // Corrupted buffer
+  }
+
+  size_t available = b->end - b->last;
+  if (len > available) {
+    return -1; // Not enough space
+  }
+
   b->last = ngx_cpymem(b->last, buf, len);
   return 0;
 }
 
 static ngx_int_t dump_rate_limit_zones(ngx_http_request_t *r, ngx_buf_t *buf) {
   ngx_array_t *zones;
-  ngx_str_t **zone_name;
+  ngx_str_t *zone_name;
   ngx_uint_t i;
   ngx_shm_zone_t *shm_zone;
   volatile ngx_list_part_t *part;
@@ -737,8 +753,10 @@ static ngx_int_t dump_rate_limit_zones(ngx_http_request_t *r, ngx_buf_t *buf) {
   // buffer
   msgpack_packer_init(&pk, buf, msgpack_ngx_buf_write);
 
-  // Create a dynamic array to hold pointers to the names of all limit_req zones
-  zones = ngx_array_create(r->pool, 0, sizeof(ngx_str_t *));
+  // Create a dynamic array to hold copies of the names of all limit_req zones
+  // Changed from ngx_str_t ** to ngx_str_t * to store actual structures instead
+  // of pointers
+  zones = ngx_array_create(r->pool, 0, sizeof(ngx_str_t));
   if (zones == NULL) {
     ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
                   "ngx_http_limit_req_rw_module: failed to create zones array");
@@ -791,7 +809,7 @@ static ngx_int_t dump_rate_limit_zones(ngx_http_request_t *r, ngx_buf_t *buf) {
       continue;
     }
 
-    // Add the zone name pointer to the zones array
+    // Add a new zone name structure to the zones array
     ngx_log_error(
         NGX_LOG_DEBUG, r->connection->log, 0,
         "ngx_http_limit_req_rw_module: pushing new zone struct to array");
@@ -802,11 +820,28 @@ static ngx_int_t dump_rate_limit_zones(ngx_http_request_t *r, ngx_buf_t *buf) {
       return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
 
+    // Copy the zone name string to the request pool
     ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
                   "ngx_http_limit_req_rw_module: copying zone name");
-    *zone_name = &shm_zone[i].shm.name;
+
+    // Set the length first
+    zone_name->len = shm_zone[i].shm.name.len;
+
+    // Allocate memory for the string data in the request pool
+    zone_name->data = ngx_palloc(r->pool, zone_name->len);
+    if (zone_name->data == NULL) {
+      ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                    "ngx_http_limit_req_rw_module: failed to allocate memory "
+                    "for zone name");
+      return NGX_HTTP_INTERNAL_SERVER_ERROR;
+    }
+
+    // Copy the actual string data
+    ngx_memcpy(zone_name->data, shm_zone[i].shm.name.data, zone_name->len);
+
     ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
-                  "ngx_http_limit_req_rw_module: zone name copied");
+                  "ngx_http_limit_req_rw_module: zone name copied: %*s",
+                  zone_name->len, zone_name->data);
   }
 
   // Serialize the array of zone names as a MessagePack array
@@ -817,9 +852,9 @@ static ngx_int_t dump_rate_limit_zones(ngx_http_request_t *r, ngx_buf_t *buf) {
   for (i = 0; i < zones->nelts; i++) {
     ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
                   "ngx_http_limit_req_rw_module: packing zone %*s",
-                  *zone_name[i]);
-    msgpack_pack_str(&pk, zone_name[i]->len);
-    msgpack_pack_str_body(&pk, zone_name[i]->data, zone_name[i]->len);
+                  zone_name[i].len, zone_name[i].data);
+    msgpack_pack_str(&pk, zone_name[i].len);
+    msgpack_pack_str_body(&pk, zone_name[i].data, zone_name[i].len);
   }
 
   return NGX_OK;
