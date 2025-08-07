@@ -853,8 +853,8 @@ static ngx_int_t dump_rate_limit_zones(ngx_http_request_t *r, ngx_buf_t *buf) {
     ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
                   "ngx_http_limit_req_rw_module: packing zone %*s",
                   zone_name[i].len, zone_name[i].data);
-    msgpack_pack_str(&pk, zone_name[i].len);
-    msgpack_pack_str_body(&pk, zone_name[i].data, zone_name[i].len);
+    msgpack_pack_bin(&pk, zone_name[i].len);
+    msgpack_pack_bin_body(&pk, zone_name[i].data, zone_name[i].len);
   }
 
   return NGX_OK;
@@ -942,8 +942,8 @@ static ngx_int_t dump_req_limits(ngx_pool_t *pool, ngx_shm_zone_t *shm_zone,
   // Write the header as a MessagePack array:
   // [zone_name, now, now_monotonic]
   msgpack_pack_array(&pk, 3);
-  msgpack_pack_str(&pk, ctx->key.value.len);
-  msgpack_pack_str_body(&pk, ctx->key.value.data, ctx->key.value.len);
+  msgpack_pack_bin(&pk, ctx->key.value.len);
+  msgpack_pack_bin_body(&pk, ctx->key.value.data, ctx->key.value.len);
   msgpack_pack_uint64(&pk, now);
   msgpack_pack_uint64(&pk, now_monotonic);
 
