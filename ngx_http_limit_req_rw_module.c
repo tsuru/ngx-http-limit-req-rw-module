@@ -652,8 +652,15 @@ static ngx_int_t ngx_http_limit_req_read_handler(ngx_http_request_t *r) {
   // Set the response content type to MessagePack
   ngx_str_set(&content_type, "application/vnd.msgpack");
   r->headers_out.content_type = content_type;
+  ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0, "Content-Type: %*s",
+                r->headers_out.content_type);
   r->headers_out.content_length_n = b->last - b->pos;
+  ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0, "Content-Length: %O",
+                r->headers_out.content_length_n);
   r->headers_out.status = NGX_HTTP_OK; /* 200 OK */
+  ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
+                "ngx_http_limit_req_rw_module: response status: %d",
+                r->headers_out.status);
 
   // Mark the buffer as the last buffer in the response
   b->last_buf = (r == r->main) ? 1 : 0; /* if subrequest 0 else 1 */
@@ -666,10 +673,15 @@ static ngx_int_t ngx_http_limit_req_read_handler(ngx_http_request_t *r) {
   // Send the response headers
   rc = ngx_http_send_header(r);
   if (rc == NGX_ERROR || rc > NGX_OK || r->header_only) {
+    ngx_log_error(
+        NGX_LOG_ERR, r->connection->log, 0,
+        "ngx_http_limit_req_rw_module: failed to send response header: %d", rc);
     return rc;
   }
 
   // Send the response body
+  ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
+                "ngx_http_limit_req_rw_module: sending response body");
   return ngx_http_output_filter(r, &out);
 }
 
@@ -857,6 +869,8 @@ static ngx_int_t dump_rate_limit_zones(ngx_http_request_t *r, ngx_buf_t *buf) {
     msgpack_pack_bin_body(&pk, zone_name[i].data, zone_name[i].len);
   }
 
+  ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
+                "ngx_http_limit_req_rw_module: array of zones packed");
   return NGX_OK;
 }
 
