@@ -756,7 +756,7 @@ static ngx_int_t dump_rate_limit_zones(ngx_http_request_t *r, ngx_buf_t *buf) {
   // Create a dynamic array to hold copies of the names of all limit_req zones
   // Changed from ngx_str_t ** to ngx_str_t * to store actual structures instead
   // of pointers
-  zones = ngx_array_create(r->pool, 0, sizeof(ngx_str_t));
+  zones = ngx_array_create(r->pool, 1, sizeof(ngx_str_t));
   if (zones == NULL) {
     ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
                   "ngx_http_limit_req_rw_module: failed to create zones array");
@@ -922,7 +922,7 @@ static ngx_int_t dump_req_limits(ngx_pool_t *pool, ngx_shm_zone_t *shm_zone,
                                  ngx_buf_t *buf,
                                  ngx_uint_t last_greater_equal) {
   ngx_http_limit_req_ctx_t *ctx;
-  ngx_queue_t *head, *q, *last;
+  ngx_queue_t *head, *q;
   ngx_http_limit_req_node_t *lr;
   time_t now, now_monotonic;
   int i;
@@ -958,11 +958,12 @@ static ngx_int_t dump_req_limits(ngx_pool_t *pool, ngx_shm_zone_t *shm_zone,
 
   // Get the head and last pointers of the queue
   head = ngx_queue_head(&ctx->sh->queue);
-  last = ngx_queue_last(head);
   q = head;
 
   // Iterate over the queue, serializing up to MAX_NUMBER_OF_RATE_LIMIT_ELEMENTS
-  for (i = 0; q != last && i < MAX_NUMBER_OF_RATE_LIMIT_ELEMENTS; i++) {
+  for (i = 0; i < MAX_NUMBER_OF_RATE_LIMIT_ELEMENTS &&
+              q != ngx_queue_sentinel(&ctx->sh->queue);
+       i++) {
     lr = ngx_queue_data(q, ngx_http_limit_req_node_t, queue);
 
     // If last_greater_equal is set, skip entries with lr->last <
@@ -979,7 +980,7 @@ static ngx_int_t dump_req_limits(ngx_pool_t *pool, ngx_shm_zone_t *shm_zone,
     msgpack_pack_uint64(&pk, lr->last);
     msgpack_pack_uint64(&pk, lr->excess);
 
-    q = q->next;
+    q = ngx_queue_next(q);
   }
 
   // Unlock the shared memory pool
