@@ -862,11 +862,18 @@ static ngx_int_t dump_rate_limit_zones(ngx_http_request_t *r, ngx_buf_t *buf) {
   msgpack_pack_array(&pk, zones->nelts);
   zone_name = zones->elts;
   for (i = 0; i < zones->nelts; i++) {
-    ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
-                  "ngx_http_limit_req_rw_module: packing zone %*s",
-                  zone_name[i].len, zone_name[i].data);
-    msgpack_pack_bin(&pk, zone_name[i].len);
-    msgpack_pack_bin_body(&pk, zone_name[i].data, zone_name[i].len);
+    if (zone_name[i].data != NULL && zone_name[i].len > 0) {
+      ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
+                    "ngx_http_limit_req_rw_module: packing zone %*s",
+                    zone_name[i].len, zone_name[i].data);
+      msgpack_pack_bin(&pk, zone_name[i].len);
+      msgpack_pack_bin_body(&pk, zone_name[i].data, zone_name[i].len);
+    } else {
+      ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                    "ngx_http_limit_req_rw_module: zone name is NULL or empty");
+      msgpack_pack_bin(&pk, 0);
+      msgpack_pack_bin_body(&pk, zone_name[i].data, zone_name[i].len);
+    }
   }
 
   ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
